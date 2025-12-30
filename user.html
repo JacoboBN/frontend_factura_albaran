@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DriveShare - Usuario</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 600px;
+      width: 100%;
+      padding: 40px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .header h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+    
+    .section {
+      display: none;
+    }
+    
+    .section.active {
+      display: block;
+    }
+    
+    .login-section {
+      text-align: center;
+    }
+    
+    .btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 15px 30px;
+      border-radius: 10px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: transform 0.2s;
+      margin: 10px;
+      width: 100%;
+      max-width: 300px;
+    }
+    
+    .btn:hover {
+      transform: translateY(-2px);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+    }
+    
+    .btn-secondary {
+      background: #6c757d;
+    }
+    
+    .user-info {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 10px;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+    
+    .file-upload {
+      border: 3px dashed #667eea;
+      border-radius: 10px;
+      padding: 60px 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.3s;
+      margin-bottom: 20px;
+    }
+    
+    .file-upload:hover {
+      background: #f8f9ff;
+    }
+    
+    .file-upload p {
+      color: #666;
+      margin-bottom: 20px;
+      font-size: 18px;
+    }
+    
+    .file-icon {
+      font-size: 64px;
+      margin-bottom: 20px;
+    }
+    
+    .status {
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 20px;
+      text-align: center;
+      display: none;
+    }
+    
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      display: block;
+    }
+    
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      display: block;
+    }
+    
+    .status.loading {
+      background: #d1ecf1;
+      color: #0c5460;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>DriveShare</h1>
+      <p style="color: #666;">Subir archivos</p>
+    </div>
+    
+    <!-- Login Section -->
+    <div class="section active" id="login-section">
+      <div class="login-section">
+        <p style="margin-bottom: 20px; color: #666;">Inicia sesión con Google para subir archivos</p>
+        <button class="btn" id="login-btn">Iniciar sesión con Google</button>
+      </div>
+    </div>
+    
+    <!-- Upload Section -->
+    <div class="section" id="upload-section">
+      <div class="user-info">
+        <h3 style="margin-bottom: 10px;">Conectado como:</h3>
+        <p style="color: #666; font-size: 14px;"><span id="user-email"></span></p>
+        <button class="btn btn-secondary" id="logout-btn" style="margin-top: 15px; padding: 10px 20px; font-size: 14px; max-width: 150px;">Cerrar sesión</button>
+      </div>
+      
+      <div class="file-upload" id="file-upload">
+        <div class="file-icon">📁</div>
+        <p>Haz clic para seleccionar un archivo</p>
+        <button class="btn">Seleccionar archivo</button>
+      </div>
+      
+      <div id="status" class="status"></div>
+    </div>
+  </div>
+  
+  <script src="user.js"></script>
+</body>
+</html>

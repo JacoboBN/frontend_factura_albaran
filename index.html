@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DriveShare - Admin</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 800px;
+      width: 100%;
+      padding: 40px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .header h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+    
+    .admin-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 8px 20px;
+      border-radius: 20px;
+      font-weight: bold;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+    
+    .section {
+      margin-bottom: 30px;
+      display: none;
+    }
+    
+    .section.active {
+      display: block;
+    }
+    
+    .login-section {
+      text-align: center;
+    }
+    
+    .btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 15px 30px;
+      border-radius: 10px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: transform 0.2s;
+      margin: 10px;
+    }
+    
+    .btn:hover {
+      transform: translateY(-2px);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+    }
+    
+    .btn-secondary {
+      background: #6c757d;
+    }
+    
+    .user-info {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+    
+    .input-group {
+      margin: 15px 0;
+    }
+    
+    .input-group label {
+      display: block;
+      margin-bottom: 5px;
+      color: #666;
+      font-weight: 500;
+    }
+    
+    .input-group input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    
+    .input-group input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .file-upload {
+      border: 3px dashed #667eea;
+      border-radius: 10px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    
+    .file-upload:hover {
+      background: #f8f9ff;
+    }
+    
+    .file-upload p {
+      color: #666;
+      margin-bottom: 15px;
+    }
+    
+    .shared-list {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 10px;
+      margin-top: 15px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .shared-item {
+      padding: 10px;
+      background: white;
+      margin-bottom: 8px;
+      border-radius: 5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .link-box {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 10px;
+      margin-top: 15px;
+      word-break: break-all;
+    }
+    
+    .link-box input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      margin-bottom: 10px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    
+    .status {
+      padding: 10px;
+      border-radius: 5px;
+      margin-top: 15px;
+      text-align: center;
+      display: none;
+    }
+    
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      display: block;
+    }
+    
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>DriveShare</h1>
+      <div class="admin-badge">ERES ADMIN</div>
+    </div>
+    
+    <!-- Login Section -->
+    <div class="section active" id="login-section">
+      <div class="login-section">
+        <p style="margin-bottom: 20px; color: #666;">Inicia sesión con Google para comenzar</p>
+        <button class="btn" id="login-btn">Iniciar sesión con Google</button>
+      </div>
+    </div>
+    
+    <!-- Setup Section -->
+    <div class="section" id="setup-section">
+      <div class="user-info">
+        <h3 style="margin-bottom: 10px;">Bienvenido, <span id="user-name"></span></h3>
+        <p style="color: #666;"><span id="user-email"></span></p>
+      </div>
+      
+      <h3 style="margin-bottom: 15px;">Compartir con usuarios</h3>
+      <div class="input-group">
+        <label>Emails de usuarios (separados por coma)</label>
+        <input type="text" id="share-emails" placeholder="usuario1@gmail.com, usuario2@gmail.com">
+      </div>
+      <button class="btn" id="share-btn">Compartir acceso</button>
+      
+      <div class="shared-list" id="shared-list" style="display: none;">
+        <h4 style="margin-bottom: 10px;">Usuarios con acceso:</h4>
+        <div id="shared-emails-list"></div>
+      </div>
+      
+      <div id="status" class="status"></div>
+    </div>
+    
+    <!-- Main Section -->
+    <div class="section" id="main-section">
+      <div class="user-info">
+        <h3 style="margin-bottom: 10px;">Panel de Administrador</h3>
+        <p style="color: #666;"><span id="main-user-email"></span></p>
+        <button class="btn btn-secondary" id="logout-btn" style="margin-top: 10px; padding: 8px 20px; font-size: 14px;">Cerrar sesión</button>
+      </div>
+      
+      <h3 style="margin-bottom: 15px;">Subir archivo</h3>
+      <div class="file-upload" id="file-upload">
+        <p>📁 Haz clic para seleccionar un archivo</p>
+        <button class="btn">Seleccionar archivo</button>
+      </div>
+      
+      <h3 style="margin-top: 30px; margin-bottom: 15px;">Link para usuarios</h3>
+      <div class="link-box">
+        <p style="margin-bottom: 10px; color: #666;">Comparte este link con los usuarios:</p>
+        <input type="text" id="user-link" readonly>
+        <button class="btn" id="copy-link-btn">Copiar link</button>
+      </div>
+      
+      <div class="shared-list">
+        <h4 style="margin-bottom: 10px;">Usuarios autorizados:</h4>
+        <div id="main-shared-list"></div>
+      </div>
+      
+      <div id="main-status" class="status"></div>
+    </div>
+  </div>
+  
+  <script src="admin.js"></script>
+</body>
+</html>
