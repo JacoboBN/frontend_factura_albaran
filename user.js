@@ -1,9 +1,7 @@
 const { ipcRenderer } = require('electron');
 
 // Elementos del DOM
-const loginSection = document.getElementById('login-section');
 const uploadSection = document.getElementById('upload-section');
-const loginBtn = document.getElementById('login-btn');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
 
@@ -18,31 +16,7 @@ async function checkSession() {
   }
 }
 
-// Login con Google
-loginBtn.addEventListener('click', async () => {
-  try {
-    loginBtn.textContent = 'Abriendo navegador...';
-    loginBtn.disabled = true;
-    
-    showStatus('Se abrirá tu navegador para iniciar sesión. Autoriza la app y vuelve aquí.', 'loading');
-    
-    const user = await ipcRenderer.invoke('google-login', true);
-    const info = await ipcRenderer.invoke('get-user-info');
-    
-    if (info.folderId) {
-      showUploadSection(info);
-    } else {
-      showStatus('Error: No se encontró la carpeta compartida. Contacta al administrador.', 'error');
-      loginBtn.textContent = 'Iniciar sesión con Google';
-      loginBtn.disabled = false;
-    }
-    
-  } catch (error) {
-    showStatus('Error al iniciar sesión: ' + error.message, 'error');
-    loginBtn.textContent = 'Iniciar sesión con Google';
-    loginBtn.disabled = false;
-  }
-});
+// Nota: el login se gestiona en index.html. Esta página solo muestra la UI principal.
 
 // Subir archivo
 fileUpload.addEventListener('click', async () => {
@@ -231,7 +205,6 @@ function renderBreadcrumbs() {
 
 // When showing upload section initially, load root or session.folderId
 async function showUploadSection(info) {
-  loginSection.classList.remove('active');
   uploadSection.classList.add('active');
   document.getElementById('user-email').textContent = info.email;
 
