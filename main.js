@@ -196,6 +196,52 @@ ipcMain.handle('create-folder', async (event, name, parentId = null) => {
   }
 });
 
+// Elegir carpeta para un archivo usando diálogos nativos (evita prompt())
+ipcMain.handle('choose-folder', async (event, fileName) => {
+  const sessionId = store.get('sessionId');
+  try {
+    const resp = await axios.post(`${BACKEND_URL}/drive/list-folders`, { sessionId });
+    const folders = resp.data.folders || [];
+
+    const buttons = folders.map(f => f.name).slice(0, 20); // limit buttons for UI
+    buttons.push('Crear nueva');
+    buttons.push('Cancelar');
+
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+      message: `Selecciona carpeta para ${fileName}`
+    });
+
+    if (response === buttons.length - 1) {
+      return null; // cancel
+    }
+
+    if (response === buttons.length - 2) {
+      // Crear nueva carpeta: usamos save dialog como entrada de texto
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: 'Nombre de la nueva carpeta',
+        defaultPath: `DriveShare - ${new Date().toLocaleString()}`,
+        buttonLabel: 'Crear'
+      });
+
+      if (canceled || !filePath) return null;
+
+      const newName = path.basename(filePath);
+      const created = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: newName });
+      return created.data.folderId;
+    }
+
+    // Selección de carpeta existente
+    return folders[response].id;
+  } catch (error) {
+    console.error('Error en choose-folder:', error);
+    return null;
+  }
+});
+
 // Obtener información de la sesión
 ipcMain.handle('get-user-info', async () => {
   const sessionId = store.get('sessionId');
