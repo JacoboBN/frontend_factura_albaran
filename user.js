@@ -12,8 +12,8 @@ checkSession();
 
 async function checkSession() {
   const info = await ipcRenderer.invoke('get-user-info');
-  
-  if (info.email && info.folderId) {
+
+  if (info && info.email) {
     showUploadSection(info);
   }
 }
@@ -67,6 +67,54 @@ fileUpload.addEventListener('click', async () => {
     showStatus('Error al subir archivo: ' + error.message, 'error');
   }
 });
+
+// Crear carpeta en Drive (desde UI)
+const createFolderBtn = document.getElementById('create-folder-btn');
+const createFolderNameInput = document.getElementById('create-folder-name');
+const shareBtn = document.getElementById('share-btn');
+const shareEmailsInput = document.getElementById('share-emails');
+
+if (createFolderBtn) {
+  createFolderBtn.addEventListener('click', async () => {
+    const name = createFolderNameInput.value.trim();
+    if (!name) { showStatus('Por favor ingresa un nombre de carpeta', 'error'); return; }
+
+    try {
+      createFolderBtn.textContent = 'Creando...';
+      createFolderBtn.disabled = true;
+      const res = await ipcRenderer.invoke('create-folder', name, null);
+      showStatus('Carpeta creada: ' + (res.folderName || res.folderId), 'success');
+      createFolderNameInput.value = '';
+    } catch (err) {
+      showStatus('Error al crear carpeta: ' + err.message, 'error');
+    } finally {
+      createFolderBtn.textContent = 'Crear carpeta';
+      createFolderBtn.disabled = false;
+    }
+  });
+}
+
+if (shareBtn) {
+  shareBtn.addEventListener('click', async () => {
+    const emailsText = shareEmailsInput.value.trim();
+    if (!emailsText) { showStatus('Por favor ingresa al menos un email', 'error'); return; }
+    const emails = emailsText.split(',').map(e => e.trim()).filter(e => e);
+    if (emails.length === 0) { showStatus('Emails inválidos', 'error'); return; }
+
+    try {
+      shareBtn.textContent = 'Compartiendo...';
+      shareBtn.disabled = true;
+      await ipcRenderer.invoke('share-folder', emails);
+      showStatus('Carpeta compartida exitosamente', 'success');
+      shareEmailsInput.value = '';
+    } catch (err) {
+      showStatus('Error al compartir: ' + err.message, 'error');
+    } finally {
+      shareBtn.textContent = 'Compartir acceso';
+      shareBtn.disabled = false;
+    }
+  });
+}
 
 function pathBasename(p) {
   try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }

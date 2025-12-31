@@ -39,14 +39,8 @@ loginBtn.addEventListener('click', async () => {
     showStatus('Se abrirá tu navegador para iniciar sesión con Google. Autoriza la app y vuelve aquí.', 'loading');
     
     const user = await ipcRenderer.invoke('google-login', false);
-    
-    showStatus('¡Sesión iniciada! Creando carpeta compartida...', 'loading');
-    
-    // Crear carpeta compartida
-    await ipcRenderer.invoke('create-shared-folder');
-    
-    userInfo = await ipcRenderer.invoke('get-user-info');
-    showSetupSection();
+      // Redirigir a la pantalla principal de usuario (user.html)
+      window.location = 'user.html';
     
   } catch (error) {
     alert('Error al iniciar sesión: ' + error.message);

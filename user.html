@@ -167,6 +167,24 @@
         <button class="btn">Seleccionar archivo</button>
       </div>
       
+      <h3 style="margin-top: 20px; margin-bottom: 10px;">Administración</h3>
+      <div style="background:#f8f9fa; padding:12px; border-radius:8px; margin-bottom:12px;">
+        <div class="input-group">
+          <label>Crear carpeta en Drive (nombre)</label>
+          <input type="text" id="create-folder-name" placeholder="DriveShare - Mi carpeta">
+        </div>
+        <button class="btn" id="create-folder-btn">Crear carpeta</button>
+      </div>
+
+      <h3 style="margin-top: 10px; margin-bottom: 10px;">Compartir carpeta</h3>
+      <div style="background:#f8f9fa; padding:12px; border-radius:8px;">
+        <div class="input-group">
+          <label>Emails de usuarios (separados por coma)</label>
+          <input type="text" id="share-emails" placeholder="usuario1@gmail.com, usuario2@gmail.com">
+        </div>
+        <button class="btn" id="share-btn">Compartir acceso</button>
+      </div>
+      
       <div id="status" class="status"></div>
     </div>
   </div>
