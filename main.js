@@ -220,16 +220,9 @@ ipcMain.handle('choose-folder', async (event, fileName) => {
     }
 
     if (response === buttons.length - 2) {
-      // Crear nueva carpeta: usamos save dialog como entrada de texto
-      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-        title: 'Nombre de la nueva carpeta',
-        defaultPath: `DriveShare - ${new Date().toLocaleString()}`,
-        buttonLabel: 'Crear'
-      });
-
-      if (canceled || !filePath) return null;
-
-      const newName = path.basename(filePath);
+      // Crear nueva carpeta: pedir nombre en una ventana modal (no crear en disco)
+      const newName = await promptForFolderName(`DriveShare - ${new Date().toLocaleString()}`);
+      if (!newName) return null;
       const created = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: newName });
       return created.data.folderId;
     }
@@ -241,6 +234,56 @@ ipcMain.handle('choose-folder', async (event, fileName) => {
     return null;
   }
 });
+
+// Modal simple para pedir nombre de carpeta (devuelve string o null)
+function promptForFolderName(defaultName) {
+  return new Promise((resolve) => {
+    const modal = new BrowserWindow({
+      parent: mainWindow,
+      modal: true,
+      width: 420,
+      height: 150,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false
+      }
+    });
+
+    const safeDefault = String(defaultName).replace(/"/g, '&quot;');
+    const html = `<!doctype html><html><body style="font-family: sans-serif; padding:12px;">
+      <h3>Nombre de la nueva carpeta</h3>
+      <input id="name" style="width:100%; font-size:14px; padding:6px;" value="${safeDefault}" />
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+        <button id="cancel">Cancelar</button>
+        <button id="ok">Crear</button>
+      </div>
+      <script>
+        const { ipcRenderer } = require('electron');
+        document.getElementById('ok').addEventListener('click', () => {
+          ipcRenderer.send('new-folder-name', document.getElementById('name').value || '');
+        });
+        document.getElementById('cancel').addEventListener('click', () => {
+          ipcRenderer.send('new-folder-name', null);
+        });
+        window.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') ipcRenderer.send('new-folder-name', document.getElementById('name').value || '');
+          if (e.key === 'Escape') ipcRenderer.send('new-folder-name', null);
+        });
+      </script>
+    </body></html>`;
+
+    ipcMain.once('new-folder-name', (ev, name) => {
+      resolve(name);
+      try { modal.close(); } catch (e) {}
+    });
+
+    modal.removeMenu();
+    modal.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  });
+}
 
 // Obtener información de la sesión
 ipcMain.handle('get-user-info', async () => {
