@@ -47,23 +47,50 @@ loginBtn.addEventListener('click', async () => {
 // Subir archivo
 fileUpload.addEventListener('click', async () => {
   try {
-    const filePath = await ipcRenderer.invoke('select-file');
-    
-    if (filePath) {
-      showStatus('Subiendo archivo...', 'loading');
-      
-      await ipcRenderer.invoke('upload-file', filePath);
-      
-      showStatus('¡Archivo subido exitosamente!', 'success');
-      
+    const filePaths = await ipcRenderer.invoke('select-file');
+
+    if (filePaths && filePaths.length > 0) {
+      const folders = await ipcRenderer.invoke('list-folders');
+
+      for (const p of filePaths) {
+        const folderId = await chooseFolderForFile(p, folders);
+        showStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
+        await ipcRenderer.invoke('upload-file', p, folderId);
+        showStatus(`¡${pathBasename(p)} subido!`, 'success');
+      }
+
       setTimeout(() => {
         document.getElementById('status').style.display = 'none';
-      }, 3000);
+      }, 2000);
     }
   } catch (error) {
     showStatus('Error al subir archivo: ' + error.message, 'error');
   }
 });
+
+function pathBasename(p) {
+  try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }
+}
+
+async function chooseFolderForFile(filePath, folders) {
+  let msg = `Selecciona carpeta para ${pathBasename(filePath)}:\n`;
+  folders.forEach((f, i) => { msg += `${i}: ${f.name}\n`; });
+  msg += "n: crear nueva carpeta\n";
+  const choice = prompt(msg, '0');
+
+  if (choice === null) throw new Error('Operación cancelada');
+
+  if (choice.toLowerCase() === 'n') {
+    const newName = prompt('Nombre de la nueva carpeta:', `DriveShare - ${new Date().toLocaleString()}`);
+    if (!newName) throw new Error('Nombre de carpeta inválido');
+    const created = await ipcRenderer.invoke('create-folder', newName, null);
+    return created.folderId || created.folderId;
+  }
+
+  const idx = parseInt(choice, 10);
+  if (!isNaN(idx) && folders[idx]) return folders[idx].id;
+  throw new Error('Selección inválida');
+}
 
 // Cerrar sesión
 logoutBtn.addEventListener('click', async () => {

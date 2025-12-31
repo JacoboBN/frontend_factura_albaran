@@ -126,21 +126,31 @@ ipcMain.handle('share-folder', async (event, emails) => {
 // Subir archivo
 ipcMain.handle('upload-file', async (event, filePath) => {
   const sessionId = store.get('sessionId');
-  
+  const targetFolderId = arguments.length >= 2 ? arguments[1] : null;
+
   try {
-    const formData = new FormData();
-    formData.append('sessionId', sessionId);
-    formData.append('file', fs.createReadStream(filePath));
-    
-    const response = await axios.post(`${BACKEND_URL}/drive/upload`, formData, {
-      headers: {
-        ...formData.getHeaders()
-      },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity
-    });
-    
-    return response.data;
+    // Support single filePath string or array of paths
+    const paths = Array.isArray(filePath) ? filePath : [filePath];
+    const results = [];
+
+    for (const p of paths) {
+      const formData = new FormData();
+      formData.append('sessionId', sessionId);
+      if (targetFolderId) formData.append('targetFolderId', targetFolderId);
+      formData.append('file', fs.createReadStream(p));
+
+      const response = await axios.post(`${BACKEND_URL}/drive/upload`, formData, {
+        headers: {
+          ...formData.getHeaders()
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      });
+
+      results.push(response.data);
+    }
+
+    return results.length === 1 ? results[0] : results;
   } catch (error) {
     console.error('Error subiendo archivo:', error);
     throw new Error(error.response?.data?.error || 'Error al subir archivo');
@@ -150,16 +160,40 @@ ipcMain.handle('upload-file', async (event, filePath) => {
 // Seleccionar archivo
 ipcMain.handle('select-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
+    properties: ['openFile', 'multiSelections'],
     filters: [
       { name: 'Todos los archivos', extensions: ['*'] }
     ]
   });
-  
+
   if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
+    return result.filePaths; // return array of paths
   }
   return null;
+});
+
+// Listar carpetas disponibles en Drive para la sesión
+ipcMain.handle('list-folders', async () => {
+  const sessionId = store.get('sessionId');
+  try {
+    const response = await axios.post(`${BACKEND_URL}/drive/list-folders`, { sessionId });
+    return response.data.folders || [];
+  } catch (error) {
+    console.error('Error listando carpetas:', error);
+    return [];
+  }
+});
+
+// Crear carpeta en Drive
+ipcMain.handle('create-folder', async (event, name, parentId = null) => {
+  const sessionId = store.get('sessionId');
+  try {
+    const response = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name, parentId });
+    return response.data;
+  } catch (error) {
+    console.error('Error creando carpeta:', error);
+    throw new Error(error.response?.data?.error || 'Error al crear carpeta');
+  }
 });
 
 // Obtener información de la sesión

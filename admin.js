@@ -96,23 +96,54 @@ shareBtn.addEventListener('click', async () => {
 // Subir archivo
 fileUpload.addEventListener('click', async () => {
   try {
-    const filePath = await ipcRenderer.invoke('select-file');
-    
-    if (filePath) {
-      showMainStatus('Subiendo archivo...', 'loading');
-      
-      await ipcRenderer.invoke('upload-file', filePath);
-      
-      showMainStatus('¡Archivo subido exitosamente!', 'success');
-      
+    const filePaths = await ipcRenderer.invoke('select-file');
+
+    if (filePaths && filePaths.length > 0) {
+      // Obtener carpetas disponibles
+      const folders = await ipcRenderer.invoke('list-folders');
+
+      for (const p of filePaths) {
+        // Elegir carpeta para este archivo
+        const folderId = await chooseFolderForFile(p, folders);
+
+        showMainStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
+        await ipcRenderer.invoke('upload-file', p, folderId);
+        showMainStatus(`¡${pathBasename(p)} subido!`, 'success');
+      }
+
       setTimeout(() => {
         document.getElementById('main-status').style.display = 'none';
-      }, 3000);
+      }, 2000);
     }
   } catch (error) {
     showMainStatus('Error al subir archivo: ' + error.message, 'error');
   }
 });
+
+function pathBasename(p) {
+  try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }
+}
+
+async function chooseFolderForFile(filePath, folders) {
+  // Construir mensaje simple
+  let msg = `Selecciona carpeta para ${pathBasename(filePath)}:\n`;
+  folders.forEach((f, i) => { msg += `${i}: ${f.name}\n`; });
+  msg += "n: crear nueva carpeta\n";
+  const choice = prompt(msg, '0');
+
+  if (choice === null) throw new Error('Operación cancelada');
+
+  if (choice.toLowerCase() === 'n') {
+    const newName = prompt('Nombre de la nueva carpeta:', `DriveShare - ${new Date().toLocaleString()}`);
+    if (!newName) throw new Error('Nombre de carpeta inválido');
+    const created = await ipcRenderer.invoke('create-folder', newName, null);
+    return created.folderId || created.folderId; 
+  }
+
+  const idx = parseInt(choice, 10);
+  if (!isNaN(idx) && folders[idx]) return folders[idx].id;
+  throw new Error('Selección inválida');
+}
 
 // Copiar link
 copyLinkBtn.addEventListener('click', async () => {
