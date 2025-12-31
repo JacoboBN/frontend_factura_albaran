@@ -23,11 +23,11 @@
     
     .container {
       background: white;
-      border-radius: 20px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-      max-width: 600px;
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+      max-width: 1000px;
       width: 100%;
-      padding: 40px;
+      padding: 20px;
     }
     
     .header {
@@ -87,13 +87,13 @@
     }
     
     .file-upload {
-      border: 3px dashed #667eea;
-      border-radius: 10px;
-      padding: 60px 40px;
+      border: 2px dashed #e6e9f8;
+      border-radius: 8px;
+      padding: 24px;
       text-align: center;
       cursor: pointer;
-      transition: background 0.3s;
-      margin-bottom: 20px;
+      transition: background 0.15s;
+      margin-bottom: 12px;
     }
     
     .file-upload:hover {
@@ -107,9 +107,27 @@
     }
     
     .file-icon {
-      font-size: 64px;
-      margin-bottom: 20px;
+      font-size: 40px;
+      margin-bottom: 12px;
     }
+
+    .layout { display:flex; gap:16px; }
+    .sidebar { width:260px; }
+    .main { flex:1; }
+    .panel { background:#fff; padding:10px; border-radius:8px; margin-top:12px; }
+    .folder-tree { max-height:520px; overflow:auto; padding:6px; }
+    .folder-tree div { padding:8px; cursor:pointer; border-radius:6px; }
+    .folder-tree div:hover { background:#f1f5ff; }
+    .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .breadcrumbs { color:#666; font-size:13px; }
+    .actions { display:flex; gap:8px; align-items:center; }
+    .actions input { padding:8px; border-radius:6px; border:1px solid #e6e6e6; }
+    .uploader { margin-top:12px; }
+    .files-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:12px; margin-top:12px; }
+    .file-tile { background:#fff; padding:10px; border-radius:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display:flex; flex-direction:column; gap:8px; }
+    .file-tile .name { font-size:14px; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .file-tile .meta { font-size:12px; color:#666; }
+    .btn.small { padding:6px 8px; font-size:13px; }
     
     .status {
       padding: 15px;
@@ -139,11 +157,11 @@
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>DriveShare</h1>
-      <p style="color: #666;">Subir archivos</p>
-    </div>
+    <div class="container">
+      <div class="header">
+        <h1>DriveShare</h1>
+        <p style="color: #666;">Explora tu Drive y sube archivos</p>
+      </div>
     
     <!-- Login Section -->
     <div class="section active" id="login-section">
@@ -155,55 +173,47 @@
     
     <!-- Upload Section with folder browser -->
     <div class="section" id="upload-section">
-      <div style="display:flex; gap:16px; align-items:flex-start;">
-        <div style="flex: 0 0 260px;">
-          <div class="user-info">
-            <h3 style="margin-bottom: 10px;">Conectado como:</h3>
-            <p style="color: #666; font-size: 14px;"><span id="user-email"></span></p>
-            <button class="btn btn-secondary" id="logout-btn" style="margin-top: 15px; padding: 10px 20px; font-size: 14px; max-width: 150px;">Cerrar sesión</button>
+      <div class="layout">
+        <aside class="sidebar">
+          <div class="user-info small">
+            <h4 style="margin-bottom:6px;">Conectado como</h4>
+            <p style="color:#666; font-size:13px;"><span id="user-email"></span></p>
+            <button class="btn btn-secondary small" id="logout-btn" style="margin-top:8px;">Cerrar sesión</button>
           </div>
 
-          <div style="background:#fff; padding:10px; border-radius:8px;">
-            <h4 style="margin-bottom:8px;">Carpetas</h4>
-            <div id="folder-tree" style="max-height:360px; overflow:auto;">
-              <!-- carpetas se cargan dinámicamente -->
+          <div class="panel">
+            <h4>Carpetas</h4>
+            <div id="folder-tree" class="folder-tree">
+              <!-- carpetas -->
             </div>
           </div>
-        </div>
+        </aside>
 
-        <div style="flex: 1 1 auto;">
-          <div class="file-upload" id="file-upload">
-            <div class="file-icon">📁</div>
-            <p>Haz clic para seleccionar un archivo</p>
-            <button class="btn">Seleccionar archivo</button>
-          </div>
-
-          <div style="display:flex; gap:12px; margin-top:12px;">
-            <div style="flex:1; background:#f8f9fa; padding:12px; border-radius:8px;">
-              <div class="input-group">
-                <label>Crear carpeta en Drive (nombre)</label>
-                <input type="text" id="create-folder-name" placeholder="DriveShare - Mi carpeta">
-              </div>
-              <button class="btn" id="create-folder-btn">Crear carpeta</button>
-            </div>
-
-            <div style="flex:1; background:#f8f9fa; padding:12px; border-radius:8px;">
-              <div class="input-group">
-                <label>Emails de usuarios (separados por coma)</label>
-                <input type="text" id="share-emails" placeholder="usuario1@gmail.com, usuario2@gmail.com">
-              </div>
-              <button class="btn" id="share-btn">Compartir acceso</button>
+        <main class="main">
+          <div class="topbar">
+            <div id="breadcrumbs" class="breadcrumbs"></div>
+            <div class="actions">
+              <input id="create-folder-name" placeholder="Nombre nueva carpeta" />
+              <button class="btn" id="create-folder-btn">Crear</button>
+              <input id="share-emails" placeholder="emails, separados por coma" />
+              <button class="btn" id="share-btn">Compartir</button>
             </div>
           </div>
 
-          <div style="margin-top:16px; background:#fff; padding:12px; border-radius:8px;">
-            <h4 style="margin-bottom:8px;">Contenido</h4>
-            <div id="breadcrumbs" style="font-size:13px; color:#666; margin-bottom:8px;"></div>
-            <div id="files-list" style="min-height:120px; max-height:360px; overflow:auto;"></div>
+          <div class="uploader">
+            <div class="file-upload" id="file-upload">
+              <div class="file-icon">📁</div>
+              <p>Haz clic para seleccionar archivos</p>
+              <button class="btn">Seleccionar archivos</button>
+            </div>
           </div>
+
+          <section class="content">
+            <div id="files-list" class="files-grid"></div>
+          </section>
 
           <div id="status" class="status"></div>
-        </div>
+        </main>
       </div>
     </div>
   </div>

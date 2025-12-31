@@ -85,6 +85,8 @@ if (createFolderBtn) {
       const res = await ipcRenderer.invoke('create-folder', name, null);
       showStatus('Carpeta creada: ' + (res.folderName || res.folderId), 'success');
       createFolderNameInput.value = '';
+      // Recargar contenido de la carpeta actual para mostrar la nueva carpeta
+      await loadFolderContents(currentFolderId, false);
     } catch (err) {
       showStatus('Error al crear carpeta: ' + err.message, 'error');
     } finally {
@@ -104,7 +106,9 @@ if (shareBtn) {
     try {
       shareBtn.textContent = 'Compartiendo...';
       shareBtn.disabled = true;
-      await ipcRenderer.invoke('share-folder', emails);
+      // compartir la carpeta actualmente seleccionada
+      const folderToShare = currentFolderId || null;
+      await ipcRenderer.invoke('share-folder', emails, folderToShare);
       showStatus('Carpeta compartida exitosamente', 'success');
       shareEmailsInput.value = '';
     } catch (err) {
@@ -116,11 +120,11 @@ if (shareBtn) {
   });
 }
 
-// Navegación de carpetas y listado de archivos
+// Navegación de carpetas y listado de archivos (mejorado)
 let currentFolderId = null;
 let breadcrumb = [];
 
-async function loadFolderContents(folderId = null, pushToBreadcrumb = true) {
+async function loadFolderContents(folderId = null, pushToBreadcrumb = true, folderName = null) {
   try {
     const res = await ipcRenderer.invoke('list-contents', folderId);
     const files = res.files || [];
@@ -129,7 +133,7 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true) {
 
     // actualizar breadcrumbs
     if (pushToBreadcrumb) {
-      breadcrumb.push({ id: folderIdUsed, name: files.length === 0 ? (folderIdUsed || 'Raíz') : (folderIdUsed || 'Raíz') });
+      breadcrumb.push({ id: folderIdUsed, name: folderName || (folderIdUsed ? 'Carpeta' : 'Mi unidad') });
     }
     renderBreadcrumbs();
 
@@ -139,67 +143,66 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true) {
     const folderTree = document.getElementById('folder-tree');
     const filesList = document.getElementById('files-list');
 
-    // Render folders in folder-tree (only children of current folder)
+    // Render folders in folder-tree (children of current folder)
     if (folderTree) {
       folderTree.innerHTML = '';
-      // Add parent/back if applicable
-      if (breadcrumb.length > 1) {
-        const back = document.createElement('div');
-        back.textContent = '⬅ Volver';
-        back.style.padding = '8px';
-        back.style.cursor = 'pointer';
-        back.addEventListener('click', () => {
-          breadcrumb.pop();
-          const parent = breadcrumb[breadcrumb.length - 1];
-          // reload parent without pushing
-          loadFolderContents(parent.id, false);
-        });
-        folderTree.appendChild(back);
-      }
-
       folders.forEach(f => {
         const el = document.createElement('div');
         el.textContent = f.name;
-        el.style.padding = '8px';
-        el.style.cursor = 'pointer';
-        el.addEventListener('click', () => loadFolderContents(f.id, true));
+        el.addEventListener('click', () => loadFolderContents(f.id, true, f.name));
         folderTree.appendChild(el);
       });
     }
 
-    // Render files
+    // Render files as tiles
     if (filesList) {
       filesList.innerHTML = '';
-      if (folders.length === 0 && docs.length === 0) {
+      const items = [...folders, ...docs];
+      if (items.length === 0) {
         filesList.innerHTML = '<p style="color:#666">Esta carpeta está vacía</p>';
       }
 
-      docs.forEach(d => {
-        const row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.justifyContent = 'space-between';
-        row.style.alignItems = 'center';
-        row.style.padding = '8px 6px';
-        row.style.borderBottom = '1px solid #eee';
+      items.forEach(item => {
+        const tile = document.createElement('div');
+        tile.className = 'file-tile';
+        const isFolder = item.mimeType === 'application/vnd.google-apps.folder';
 
-        const left = document.createElement('div');
-        left.textContent = d.name;
-        left.style.flex = '1';
+        const icon = document.createElement('div');
+        icon.textContent = isFolder ? '📁' : '📄';
+        icon.style.fontSize = '20px';
 
-        const right = document.createElement('div');
-        const openBtn = document.createElement('button');
-        openBtn.className = 'btn btn-secondary';
-        openBtn.textContent = 'Abrir en Drive';
-        openBtn.style.padding = '6px 10px';
-        openBtn.addEventListener('click', () => {
-          const url = `https://drive.google.com/file/d/${d.id}/view`;
-          ipcRenderer.invoke('open-external', url);
-        });
-        right.appendChild(openBtn);
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = item.name;
 
-        row.appendChild(left);
-        row.appendChild(right);
-        filesList.appendChild(row);
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = isFolder ? 'Carpeta' : `${item.mimeType || ''} ${formatBytes(item.size)}`;
+
+        const actions = document.createElement('div');
+        actions.style.marginTop = 'auto';
+        if (isFolder) {
+          const openBtn = document.createElement('button');
+          openBtn.className = 'btn small';
+          openBtn.textContent = 'Abrir';
+          openBtn.addEventListener('click', () => loadFolderContents(item.id, true, item.name));
+          actions.appendChild(openBtn);
+        } else {
+          const openBtn = document.createElement('button');
+          openBtn.className = 'btn small';
+          openBtn.textContent = 'Abrir';
+          openBtn.addEventListener('click', () => {
+            const url = `https://drive.google.com/file/d/${item.id}/view`;
+            ipcRenderer.invoke('open-external', url);
+          });
+          actions.appendChild(openBtn);
+        }
+
+        tile.appendChild(icon);
+        tile.appendChild(name);
+        tile.appendChild(meta);
+        tile.appendChild(actions);
+        filesList.appendChild(tile);
       });
     }
 
@@ -220,7 +223,7 @@ function renderBreadcrumbs() {
     span.addEventListener('click', () => {
       // go to this breadcrumb
       breadcrumb = breadcrumb.slice(0, idx + 1);
-      loadFolderContents(b.id, false);
+      loadFolderContents(b.id, false, b.name);
     });
     bc.appendChild(span);
   });
@@ -235,12 +238,19 @@ async function showUploadSection(info) {
   // start breadcrumb with root
   breadcrumb = [];
   const rootId = info.folderId || null;
-  breadcrumb.push({ id: rootId, name: 'Raíz' });
-  await loadFolderContents(rootId, false);
+  breadcrumb.push({ id: rootId, name: 'Mi unidad' });
+  await loadFolderContents(rootId, false, 'Mi unidad');
 }
 
 function pathBasename(p) {
   try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '';
+  const sizes = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed( (i===0)?0:1 ) + ' ' + sizes[i];
 }
 
 async function chooseFolderForFile(filePath) {
@@ -256,14 +266,7 @@ logoutBtn.addEventListener('click', async () => {
     await ipcRenderer.invoke('logout');
   }
 });
-
-// Mostrar sección de subida
-function showUploadSection(info) {
-  loginSection.classList.remove('active');
-  uploadSection.classList.add('active');
-  
-  document.getElementById('user-email').textContent = info.email;
-}
+// (showUploadSection está implementada arriba con navegación mejorada)
 
 // Mostrar mensajes de estado
 function showStatus(message, type) {

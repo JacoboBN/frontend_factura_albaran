@@ -106,14 +106,15 @@ ipcMain.handle('create-shared-folder', async () => {
   }
 });
 
-// Compartir carpeta con usuarios
-ipcMain.handle('share-folder', async (event, emails) => {
+// Compartir carpeta con usuarios (acepta folderId opcional)
+ipcMain.handle('share-folder', async (event, emails, folderId = null) => {
   const sessionId = store.get('sessionId');
   
   try {
     const response = await axios.post(`${BACKEND_URL}/drive/share-folder`, {
       sessionId,
-      emails
+      emails,
+      folderId
     });
     
     return response.data;
