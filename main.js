@@ -124,9 +124,8 @@ ipcMain.handle('share-folder', async (event, emails) => {
 });
 
 // Subir archivo
-ipcMain.handle('upload-file', async (event, filePath) => {
+ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => {
   const sessionId = store.get('sessionId');
-  const targetFolderId = arguments.length >= 2 ? arguments[1] : null;
 
   try {
     // Support single filePath string or array of paths
