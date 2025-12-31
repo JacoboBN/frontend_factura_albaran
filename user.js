@@ -116,6 +116,129 @@ if (shareBtn) {
   });
 }
 
+// Navegación de carpetas y listado de archivos
+let currentFolderId = null;
+let breadcrumb = [];
+
+async function loadFolderContents(folderId = null, pushToBreadcrumb = true) {
+  try {
+    const res = await ipcRenderer.invoke('list-contents', folderId);
+    const files = res.files || [];
+    const folderIdUsed = res.folderId || folderId || null;
+    currentFolderId = folderIdUsed;
+
+    // actualizar breadcrumbs
+    if (pushToBreadcrumb) {
+      breadcrumb.push({ id: folderIdUsed, name: files.length === 0 ? (folderIdUsed || 'Raíz') : (folderIdUsed || 'Raíz') });
+    }
+    renderBreadcrumbs();
+
+    const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
+    const docs = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
+
+    const folderTree = document.getElementById('folder-tree');
+    const filesList = document.getElementById('files-list');
+
+    // Render folders in folder-tree (only children of current folder)
+    if (folderTree) {
+      folderTree.innerHTML = '';
+      // Add parent/back if applicable
+      if (breadcrumb.length > 1) {
+        const back = document.createElement('div');
+        back.textContent = '⬅ Volver';
+        back.style.padding = '8px';
+        back.style.cursor = 'pointer';
+        back.addEventListener('click', () => {
+          breadcrumb.pop();
+          const parent = breadcrumb[breadcrumb.length - 1];
+          // reload parent without pushing
+          loadFolderContents(parent.id, false);
+        });
+        folderTree.appendChild(back);
+      }
+
+      folders.forEach(f => {
+        const el = document.createElement('div');
+        el.textContent = f.name;
+        el.style.padding = '8px';
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', () => loadFolderContents(f.id, true));
+        folderTree.appendChild(el);
+      });
+    }
+
+    // Render files
+    if (filesList) {
+      filesList.innerHTML = '';
+      if (folders.length === 0 && docs.length === 0) {
+        filesList.innerHTML = '<p style="color:#666">Esta carpeta está vacía</p>';
+      }
+
+      docs.forEach(d => {
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.justifyContent = 'space-between';
+        row.style.alignItems = 'center';
+        row.style.padding = '8px 6px';
+        row.style.borderBottom = '1px solid #eee';
+
+        const left = document.createElement('div');
+        left.textContent = d.name;
+        left.style.flex = '1';
+
+        const right = document.createElement('div');
+        const openBtn = document.createElement('button');
+        openBtn.className = 'btn btn-secondary';
+        openBtn.textContent = 'Abrir en Drive';
+        openBtn.style.padding = '6px 10px';
+        openBtn.addEventListener('click', () => {
+          const url = `https://drive.google.com/file/d/${d.id}/view`;
+          ipcRenderer.invoke('open-external', url);
+        });
+        right.appendChild(openBtn);
+
+        row.appendChild(left);
+        row.appendChild(right);
+        filesList.appendChild(row);
+      });
+    }
+
+  } catch (err) {
+    showStatus('Error cargando carpeta: ' + (err.message || err), 'error');
+  }
+}
+
+function renderBreadcrumbs() {
+  const bc = document.getElementById('breadcrumbs');
+  if (!bc) return;
+  bc.innerHTML = '';
+  breadcrumb.forEach((b, idx) => {
+    const span = document.createElement('span');
+    span.style.cursor = 'pointer';
+    span.style.marginRight = '8px';
+    span.textContent = (b.name || 'Carpeta') + (idx < breadcrumb.length - 1 ? ' /' : '');
+    span.addEventListener('click', () => {
+      // go to this breadcrumb
+      breadcrumb = breadcrumb.slice(0, idx + 1);
+      loadFolderContents(b.id, false);
+    });
+    bc.appendChild(span);
+  });
+}
+
+// When showing upload section initially, load root or session.folderId
+async function showUploadSection(info) {
+  loginSection.classList.remove('active');
+  uploadSection.classList.add('active');
+  document.getElementById('user-email').textContent = info.email;
+
+  // start breadcrumb with root
+  breadcrumb = [];
+  const rootId = info.folderId || null;
+  breadcrumb.push({ id: rootId, name: 'Raíz' });
+  await loadFolderContents(rootId, false);
+}
+
 function pathBasename(p) {
   try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }
 }

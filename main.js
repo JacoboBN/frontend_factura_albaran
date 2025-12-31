@@ -183,6 +183,29 @@ ipcMain.handle('list-folders', async () => {
   }
 });
 
+// Listar contenido de una carpeta (carpetas y archivos)
+ipcMain.handle('list-contents', async (event, folderId = null) => {
+  const sessionId = store.get('sessionId');
+  try {
+    const response = await axios.post(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId });
+    return response.data;
+  } catch (error) {
+    console.error('Error listando contenido:', error);
+    return { files: [], folderId: null };
+  }
+});
+
+// Abrir URL externa
+ipcMain.handle('open-external', async (event, url) => {
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch (e) {
+    console.error('Error abriendo URL externa:', e);
+    return false;
+  }
+});
+
 // Crear carpeta en Drive
 ipcMain.handle('create-folder', async (event, name, parentId = null) => {
   const sessionId = store.get('sessionId');

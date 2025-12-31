@@ -153,39 +153,58 @@
       </div>
     </div>
     
-    <!-- Upload Section -->
+    <!-- Upload Section with folder browser -->
     <div class="section" id="upload-section">
-      <div class="user-info">
-        <h3 style="margin-bottom: 10px;">Conectado como:</h3>
-        <p style="color: #666; font-size: 14px;"><span id="user-email"></span></p>
-        <button class="btn btn-secondary" id="logout-btn" style="margin-top: 15px; padding: 10px 20px; font-size: 14px; max-width: 150px;">Cerrar sesión</button>
-      </div>
-      
-      <div class="file-upload" id="file-upload">
-        <div class="file-icon">📁</div>
-        <p>Haz clic para seleccionar un archivo</p>
-        <button class="btn">Seleccionar archivo</button>
-      </div>
-      
-      <h3 style="margin-top: 20px; margin-bottom: 10px;">Administración</h3>
-      <div style="background:#f8f9fa; padding:12px; border-radius:8px; margin-bottom:12px;">
-        <div class="input-group">
-          <label>Crear carpeta en Drive (nombre)</label>
-          <input type="text" id="create-folder-name" placeholder="DriveShare - Mi carpeta">
-        </div>
-        <button class="btn" id="create-folder-btn">Crear carpeta</button>
-      </div>
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex: 0 0 260px;">
+          <div class="user-info">
+            <h3 style="margin-bottom: 10px;">Conectado como:</h3>
+            <p style="color: #666; font-size: 14px;"><span id="user-email"></span></p>
+            <button class="btn btn-secondary" id="logout-btn" style="margin-top: 15px; padding: 10px 20px; font-size: 14px; max-width: 150px;">Cerrar sesión</button>
+          </div>
 
-      <h3 style="margin-top: 10px; margin-bottom: 10px;">Compartir carpeta</h3>
-      <div style="background:#f8f9fa; padding:12px; border-radius:8px;">
-        <div class="input-group">
-          <label>Emails de usuarios (separados por coma)</label>
-          <input type="text" id="share-emails" placeholder="usuario1@gmail.com, usuario2@gmail.com">
+          <div style="background:#fff; padding:10px; border-radius:8px;">
+            <h4 style="margin-bottom:8px;">Carpetas</h4>
+            <div id="folder-tree" style="max-height:360px; overflow:auto;">
+              <!-- carpetas se cargan dinámicamente -->
+            </div>
+          </div>
         </div>
-        <button class="btn" id="share-btn">Compartir acceso</button>
+
+        <div style="flex: 1 1 auto;">
+          <div class="file-upload" id="file-upload">
+            <div class="file-icon">📁</div>
+            <p>Haz clic para seleccionar un archivo</p>
+            <button class="btn">Seleccionar archivo</button>
+          </div>
+
+          <div style="display:flex; gap:12px; margin-top:12px;">
+            <div style="flex:1; background:#f8f9fa; padding:12px; border-radius:8px;">
+              <div class="input-group">
+                <label>Crear carpeta en Drive (nombre)</label>
+                <input type="text" id="create-folder-name" placeholder="DriveShare - Mi carpeta">
+              </div>
+              <button class="btn" id="create-folder-btn">Crear carpeta</button>
+            </div>
+
+            <div style="flex:1; background:#f8f9fa; padding:12px; border-radius:8px;">
+              <div class="input-group">
+                <label>Emails de usuarios (separados por coma)</label>
+                <input type="text" id="share-emails" placeholder="usuario1@gmail.com, usuario2@gmail.com">
+              </div>
+              <button class="btn" id="share-btn">Compartir acceso</button>
+            </div>
+          </div>
+
+          <div style="margin-top:16px; background:#fff; padding:12px; border-radius:8px;">
+            <h4 style="margin-bottom:8px;">Contenido</h4>
+            <div id="breadcrumbs" style="font-size:13px; color:#666; margin-bottom:8px;"></div>
+            <div id="files-list" style="min-height:120px; max-height:360px; overflow:auto;"></div>
+          </div>
+
+          <div id="status" class="status"></div>
+        </div>
       </div>
-      
-      <div id="status" class="status"></div>
     </div>
   </div>
   
