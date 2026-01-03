@@ -233,6 +233,18 @@ async function chooseFolderForFile(filePath) {
   return folderId;
 }
 
+// Botón atrás
+const backBtn = document.getElementById('back-btn');
+if (backBtn) {
+  backBtn.addEventListener('click', () => {
+    if (breadcrumb.length > 1) {
+      breadcrumb.pop();
+      const prev = breadcrumb[breadcrumb.length - 1];
+      loadFolderContents(prev.id, false, prev.name);
+    }
+  });
+}
+
 // Cerrar sesión
 logoutBtn.addEventListener('click', async () => {
   if (confirm('¿Estás seguro de que quieres cerrar sesión?')) {
@@ -246,7 +258,7 @@ function showStatus(message, type) {
   const status = document.getElementById('status');
   status.textContent = message;
   status.className = `status ${type}`;
-  
+
   if (type === 'success' || type === 'error') {
     setTimeout(() => {
       status.style.display = 'none';
