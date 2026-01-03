@@ -77,12 +77,16 @@ if (shareBtn) {
     const emails = emailsText.split(',').map(e => e.trim()).filter(e => e);
     if (emails.length === 0) { showStatus('Emails inválidos', 'error'); return; }
 
+    if (!currentFolderId) {
+      showStatus('Selecciona una carpeta real primero (no la raíz)', 'error');
+      return;
+    }
+
     try {
       shareBtn.textContent = 'Compartiendo...';
       shareBtn.disabled = true;
       // compartir la carpeta actualmente seleccionada
-      const folderToShare = currentFolderId || null;
-      await ipcRenderer.invoke('share-folder', emails, folderToShare);
+      await ipcRenderer.invoke('share-folder', emails, currentFolderId);
       showStatus('Carpeta compartida exitosamente', 'success');
       shareEmailsInput.value = '';
     } catch (err) {
