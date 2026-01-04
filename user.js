@@ -112,6 +112,8 @@ if (shareBtn) {
       await ipcRenderer.invoke('share-folder', emails, folderToShare);
       showStatus('Carpeta compartida exitosamente', 'success');
       shareEmailsInput.value = '';
+      // Refresh shared lists to reflect the new permissions
+      await refreshSharedLists();
     } catch (err) {
       showStatus('Error al compartir: ' + err.message, 'error');
     } finally {
@@ -119,6 +121,46 @@ if (shareBtn) {
       shareBtn.disabled = false;
     }
   });
+}
+
+// Refrescar listas de usuarios compartidos en la UI (admin y main)
+async function refreshSharedLists() {
+  try {
+    const info = await ipcRenderer.invoke('get-user-info');
+    const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
+
+    const sharedEmailsList = document.getElementById('shared-emails-list');
+    if (sharedEmailsList) {
+      sharedEmailsList.innerHTML = '';
+      if (shared.length === 0) {
+        sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+      } else {
+        shared.forEach(email => {
+          const div = document.createElement('div');
+          div.className = 'shared-item';
+          div.innerHTML = `<span>${email}</span>`;
+          sharedEmailsList.appendChild(div);
+        });
+      }
+    }
+
+    const mainShared = document.getElementById('main-shared-list');
+    if (mainShared) {
+      mainShared.innerHTML = '';
+      if (shared.length === 0) {
+        mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+      } else {
+        shared.forEach(email => {
+          const div = document.createElement('div');
+          div.className = 'shared-item';
+          div.textContent = email;
+          mainShared.appendChild(div);
+        });
+      }
+    }
+  } catch (e) {
+    console.error('Error refrescando shared lists:', e);
+  }
 }
 
 // Navegación de carpetas y listado de archivos (mejorado)
@@ -371,6 +413,8 @@ async function showUploadSection(info) {
   const rootId = null;
   breadcrumb.push({ id: rootId, name: 'Mi unidad' });
   await loadFolderContents(null, false, 'Mi unidad');
+  // Refresh shared lists for the UI
+  await refreshSharedLists();
 }
 
 function pathBasename(p) {
