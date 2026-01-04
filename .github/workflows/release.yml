@@ -26,11 +26,15 @@ jobs:
         run: npm ci
 
       - name: Build Windows installer
-        run: npm run build:win
+        run: npm run build:win -- --publish never
 
       - name: Create GitHub Release + upload assets
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            dist/**
+            dist/*.exe
+            dist/*.blockmap
+
           generate_release_notes: true
