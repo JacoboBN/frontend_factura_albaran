@@ -1,6 +1,6 @@
 {
   "name": "driveshare-app",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DriveShare - App de escritorio",
   "main": "main.js",
   "scripts": {
@@ -26,7 +26,10 @@
       "category": "public.app-category.productivity"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "assets/icon.png",
       "category": "Utility"
     },
