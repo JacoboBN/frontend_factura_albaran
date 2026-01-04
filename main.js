@@ -22,16 +22,7 @@ function createWindow() {
     icon: path.join(__dirname, 'assets/icon.png')
   });
 
-  // Verificar si es modo usuario
-  const isUser = process.argv.includes('--user-mode');
-  const userMode = store.get('userMode', false);
-
-  if (isUser || userMode) {
-    store.set('userMode', true);
-    mainWindow.loadFile('user.html');
-  } else {
-    mainWindow.loadFile('index.html');
-  }
+  mainWindow.loadFile('user.html');
 }
 
 app.whenReady().then(createWindow);

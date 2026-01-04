@@ -1,18 +1,41 @@
 const { ipcRenderer } = require('electron');
 
 // Elementos del DOM
+const loginSection = document.getElementById('login-section');
 const uploadSection = document.getElementById('upload-section');
+const loginBtn = document.getElementById('login-btn');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
 
 // Verificar si ya hay sesión
 checkSession();
 
+// Login con Google
+loginBtn.addEventListener('click', async () => {
+  try {
+    loginBtn.textContent = 'Abriendo navegador...';
+    loginBtn.disabled = true;
+    showStatus('Se abrirá tu navegador para iniciar sesión con Google. Autoriza la app y vuelve aquí.', 'loading');
+
+    const user = await ipcRenderer.invoke('google-login', false);
+    checkSession();
+
+  } catch (error) {
+    alert('Error al iniciar sesión: ' + error.message);
+    loginBtn.textContent = 'Iniciar sesión con Google';
+    loginBtn.disabled = false;
+    document.getElementById('status').style.display = 'none';
+  }
+});
+
 async function checkSession() {
   const info = await ipcRenderer.invoke('get-user-info');
 
   if (info && info.email) {
     showUploadSection(info);
+  } else {
+    loginSection.classList.add('active');
+    uploadSection.classList.remove('active');
   }
 }
 
@@ -205,6 +228,7 @@ function renderBreadcrumbs() {
 
 // When showing upload section initially, load root or session.folderId
 async function showUploadSection(info) {
+  loginSection.classList.remove('active');
   uploadSection.classList.add('active');
   document.getElementById('user-email').textContent = info.email;
 
