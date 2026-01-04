@@ -56,6 +56,9 @@ fileUpload.addEventListener('click', async () => {
         showStatus(`¡${pathBasename(p)} subido!`, 'success');
       }
 
+      // Refresh the current folder contents after upload
+      await loadFolderContents(currentFolderId, false);
+
       setTimeout(() => {
         document.getElementById('status').style.display = 'none';
       }, 2000);
@@ -82,7 +85,8 @@ if (createFolderBtn) {
       const res = await ipcRenderer.invoke('create-folder', name, null);
       showStatus('Carpeta creada: ' + (res.folderName || res.folderId), 'success');
       createFolderNameInput.value = '';
-      // Recargar contenido de la carpeta actual para mostrar la nueva carpeta
+      // Reload folder tree and current contents
+      await loadFolderTree();
       await loadFolderContents(currentFolderId, false);
     } catch (err) {
       showStatus('Error al crear carpeta: ' + err.message, 'error');
@@ -120,6 +124,103 @@ if (shareBtn) {
 // Navegación de carpetas y listado de archivos (mejorado)
 let currentFolderId = null;
 let breadcrumb = [];
+let folderTreeData = null;
+
+async function loadFolderTree() {
+  try {
+    const res = await ipcRenderer.invoke('list-folders');
+    const folders = res.folders || [];
+
+    // Build tree structure
+    const tree = {};
+    const nodes = {};
+
+    // Create nodes
+    folders.forEach(f => {
+      nodes[f.id] = { ...f, children: [], expanded: false };
+    });
+
+    // Build hierarchy
+    folders.forEach(f => {
+      const parentId = f.parents && f.parents[0];
+      if (parentId && nodes[parentId]) {
+        nodes[parentId].children.push(nodes[f.id]);
+      } else {
+        // Root level
+        tree[f.id] = nodes[f.id];
+      }
+    });
+    // Sort children of every node alphabetically for consistent order
+    Object.values(nodes).forEach(n => {
+      if (n.children && n.children.length > 0) {
+        n.children.sort((a, b) => (a.name || '').toString().localeCompare((b.name || '').toString()));
+      }
+    });
+
+    folderTreeData = tree;
+    return tree;
+  } catch (err) {
+    console.error('Error loading folder tree:', err);
+    return {};
+  }
+}
+
+function renderFolderTree(container, tree, currentFolderId, level = 0) {
+  container.innerHTML = '';
+
+  // Add "Mi unidad" root
+  const rootEl = document.createElement('div');
+  rootEl.style.paddingLeft = '0px';
+  rootEl.style.cursor = 'pointer';
+  rootEl.style.fontWeight = (!currentFolderId) ? 'bold' : 'normal';
+  rootEl.textContent = '📁 Mi unidad';
+  rootEl.addEventListener('click', () => loadFolderContents(null, true, 'Mi unidad'));
+  container.appendChild(rootEl);
+
+  // Render tree roots in sorted order for stable UI
+  const roots = Object.values(tree || {}).sort((a, b) => (a.name || '').toString().localeCompare((b.name || '').toString()));
+  roots.forEach(node => {
+    renderTreeNode(container, node, currentFolderId, level + 1);
+  });
+}
+
+// Helper: check if a node (or any descendant) has id === targetId
+function nodeContains(node, targetId) {
+  if (!targetId) return false;
+  if (node.id === targetId) return true;
+  for (const child of node.children || []) {
+    if (nodeContains(child, targetId)) return true;
+  }
+  return false;
+}
+
+function renderTreeNode(container, node, currentFolderId, level) {
+  const el = document.createElement('div');
+  el.style.paddingLeft = (level * 20) + 'px';
+  el.style.cursor = 'pointer';
+  el.style.fontWeight = (node.id === currentFolderId) ? 'bold' : 'normal';
+
+  const toggleIcon = node.children.length > 0 ? (node.expanded ? '📂' : '📁') : '📄';
+  el.innerHTML = `${toggleIcon} ${node.name}`;
+  // Auto-expand this branch if it contains the current folder
+  if (currentFolderId && nodeContains(node, currentFolderId)) {
+    node.expanded = true;
+  }
+  // Open folder on click. If it has children, expand it and navigate into it.
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    node.expanded = true;
+    loadFolderContents(node.id, true, node.name);
+  });
+
+  container.appendChild(el);
+
+  if (node.expanded && node.children.length > 0) {
+    node.children.forEach(child => {
+      renderTreeNode(container, child, currentFolderId, level + 1);
+    });
+  }
+}
 
 async function loadFolderContents(folderId = null, pushToBreadcrumb = true, folderName = null) {
   try {
@@ -130,7 +231,18 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
 
     // actualizar breadcrumbs
     if (pushToBreadcrumb) {
-      breadcrumb.push({ id: folderIdUsed, name: folderName || (folderIdUsed ? 'Carpeta' : 'Mi unidad') });
+      // If navigating to root, reset breadcrumb to single root entry
+      if (!folderIdUsed) {
+        breadcrumb = [{ id: null, name: 'Mi unidad' }];
+      } else {
+        // If this folder already exists in breadcrumb, trim to it
+        const existingIndex = breadcrumb.findIndex(b => b && b.id === folderIdUsed);
+        if (existingIndex >= 0) {
+          breadcrumb = breadcrumb.slice(0, existingIndex + 1);
+        } else {
+          breadcrumb.push({ id: folderIdUsed, name: folderName || 'Carpeta' });
+        }
+      }
     }
     renderBreadcrumbs();
 
@@ -140,15 +252,9 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
     const folderTree = document.getElementById('folder-tree');
     const filesList = document.getElementById('files-list');
 
-    // Render folders in folder-tree (children of current folder)
-    if (folderTree) {
-      folderTree.innerHTML = '';
-      folders.forEach(f => {
-        const el = document.createElement('div');
-        el.textContent = f.name;
-        el.addEventListener('click', () => loadFolderContents(f.id, true, f.name));
-        folderTree.appendChild(el);
-      });
+    // Render full folder tree
+    if (folderTree && folderTreeData) {
+      renderFolderTree(folderTree, folderTreeData, currentFolderId);
     }
 
     // Render files as tiles
@@ -224,6 +330,30 @@ function renderBreadcrumbs() {
     });
     bc.appendChild(span);
   });
+
+  // Also update sidebar path if present so user can jump from the left panel
+  const sp = document.getElementById('sidebar-path');
+  if (sp) {
+    sp.innerHTML = '';
+    breadcrumb.forEach((b, idx) => {
+      const s = document.createElement('span');
+      s.style.cursor = 'pointer';
+      s.style.marginRight = '6px';
+      s.style.color = '#333';
+      s.textContent = b.name || 'Carpeta';
+      s.addEventListener('click', () => {
+        breadcrumb = breadcrumb.slice(0, idx + 1);
+        loadFolderContents(b.id, false, b.name);
+      });
+      sp.appendChild(s);
+      if (idx < breadcrumb.length - 1) {
+        const sep = document.createElement('span');
+        sep.textContent = ' / ';
+        sep.style.color = '#777';
+        sp.appendChild(sep);
+      }
+    });
+  }
 }
 
 // When showing upload section initially, load root or session.folderId
@@ -232,11 +362,15 @@ async function showUploadSection(info) {
   uploadSection.classList.add('active');
   document.getElementById('user-email').textContent = info.email;
 
+  // Load the full folder tree
+  await loadFolderTree();
+
   // start breadcrumb with root
   breadcrumb = [];
-  const rootId = info.folderId || null;
+  // Use Drive root as "Mi unidad" (null) so the breadcrumb represents the real root
+  const rootId = null;
   breadcrumb.push({ id: rootId, name: 'Mi unidad' });
-  await loadFolderContents(rootId, false, 'Mi unidad');
+  await loadFolderContents(null, false, 'Mi unidad');
 }
 
 function pathBasename(p) {

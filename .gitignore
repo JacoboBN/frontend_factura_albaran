@@ -2,6 +2,9 @@
 node_modules/
 package-lock.json
 
+# Carpeta de construcción
+dist/
+
 # Environment variables (NUNCA subir al repositorio)
 .env
 .env.local
