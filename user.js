@@ -288,6 +288,23 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
     }
     renderBreadcrumbs();
 
+    // Ocultar la opción de compartir cuando estamos en la raíz de Drive ('root' o null)
+    try {
+      const shareBtnEl = document.getElementById('share-btn');
+      const shareInputEl = document.getElementById('share-emails');
+      if (shareBtnEl && shareInputEl) {
+        if (folderIdUsed === 'root' || folderIdUsed === null) {
+          shareBtnEl.style.display = 'none';
+          shareInputEl.style.display = 'none';
+        } else {
+          shareBtnEl.style.display = '';
+          shareInputEl.style.display = '';
+        }
+      }
+    } catch (e) {
+      console.warn('No se pudo ajustar visibilidad de compartir:', e);
+    }
+
     const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
     const docs = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
 
