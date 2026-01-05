@@ -81,6 +81,80 @@
     .btn:hover {
       background: #0056b3;
     }
+
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      background-color: rgba(0,0,0,0.4);
+    }
+
+    .modal-content {
+      background-color: #fefefe;
+      margin: 5% auto;
+      padding: 20px;
+      border: 1px solid #888;
+      width: 90%;
+      max-width: 1200px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .close {
+      color: #aaa;
+      float: right;
+      font-size: 28px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .close:hover,
+    .close:focus {
+      color: black;
+      text-decoration: none;
+    }
+
+    .text-comparison {
+      display: flex;
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .text-box {
+      flex: 1;
+      border: 1px solid #ccc;
+      padding: 15px;
+      background: #f9f9f9;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .text-box h3 {
+      margin-bottom: 10px;
+      color: #333;
+    }
+
+    .comparison-result {
+      text-align: center;
+      margin-top: 20px;
+      padding: 10px;
+      font-weight: bold;
+    }
+
+    .match {
+      color: green;
+    }
+
+    .no-match {
+      color: red;
+    }
   </style>
 </head>
 <body>
@@ -107,7 +181,43 @@
     <button class="btn" id="compare-btn">Comparar</button>
   </div>
 
+  <!-- Modal for displaying OCR results -->
+  <div id="comparison-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" id="close-modal">&times;</span>
+      <h2>Resultado de la Comparación OCR</h2>
+
+      <div class="text-comparison">
+        <div class="text-box">
+          <h3>Texto Extraído - Documento Izquierdo</h3>
+          <div id="left-text"></div>
+        </div>
+        <div class="text-box">
+          <h3>Texto Extraído - Documento Derecho</h3>
+          <div id="right-text"></div>
+        </div>
+      </div>
+
+      <div class="comparison-result" id="comparison-result"></div>
+    </div>
+  </div>
+
   <script>
+    // Modal functionality
+    const modal = document.getElementById('comparison-modal');
+    const closeBtn = document.getElementById('close-modal');
+
+    closeBtn.onclick = function() {
+      modal.style.display = 'none';
+    }
+
+    window.onclick = function(event) {
+      if (event.target === modal) {
+        modal.style.display = 'none';
+      }
+    }
+
+    // File input handlers
     document.getElementById('left-file').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (file) {
@@ -124,7 +234,38 @@
       }
     });
 
-    document.getElementById('compare-btn').addEventListener('click', function() {
+    // Function to extract text using OCR
+    async function extractText(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const response = await fetch('http://localhost:10000/ocr', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          throw new Error(`Error en OCR: ${response.status}`);
+        }
+
+        const result = await response.json();
+        return result.text || '';
+      } catch (error) {
+        console.error('Error extracting text:', error);
+        throw new Error(`Error al extraer texto: ${error.message}`);
+      }
+    }
+
+    // Function to compare texts
+    function compareTexts(text1, text2) {
+      // Normalize texts for comparison (remove extra whitespace, normalize line breaks)
+      const normalize = (text) => text.replace(/\s+/g, ' ').trim().toLowerCase();
+      return normalize(text1) === normalize(text2);
+    }
+
+    // Main compare function
+    document.getElementById('compare-btn').addEventListener('click', async function() {
       const leftFile = document.getElementById('left-file').files[0];
       const rightFile = document.getElementById('right-file').files[0];
 
@@ -133,36 +274,51 @@
         return;
       }
 
-      // Check if both are .txt
+      // Validate file types (PDF, images, or text files)
+      const allowedExtensions = ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'tiff', 'txt'];
       const leftExt = leftFile.name.split('.').pop().toLowerCase();
       const rightExt = rightFile.name.split('.').pop().toLowerCase();
 
-      if (leftExt !== 'txt' || rightExt !== 'txt') {
-        alert('Solo se pueden comparar archivos .txt. Por favor selecciona archivos de texto.');
+      if (!allowedExtensions.includes(leftExt) || !allowedExtensions.includes(rightExt)) {
+        alert('Solo se pueden comparar archivos PDF, imágenes (JPG, PNG, etc.) o archivos de texto.');
         return;
       }
 
-      // Read and compare
-      const readerLeft = new FileReader();
-      const readerRight = new FileReader();
+      // Show loading
+      this.disabled = true;
+      this.textContent = 'Procesando...';
 
-      readerLeft.onload = function(e) {
-        const contentLeft = e.target.result;
+      try {
+        // Extract text from both files
+        const [leftText, rightText] = await Promise.all([
+          extractText(leftFile),
+          extractText(rightFile)
+        ]);
 
-        readerRight.onload = function(e) {
-          const contentRight = e.target.result;
+        // Display results in modal
+        document.getElementById('left-text').textContent = leftText || 'No se pudo extraer texto';
+        document.getElementById('right-text').textContent = rightText || 'No se pudo extraer texto';
 
-          if (contentLeft === contentRight) {
-            alert('Los documentos son idénticos.');
-          } else {
-            alert('Los documentos son diferentes.');
-          }
-        };
+        // Compare texts
+        const isMatch = compareTexts(leftText, rightText);
+        const resultDiv = document.getElementById('comparison-result');
 
-        readerRight.readAsText(rightFile);
-      };
+        if (isMatch) {
+          resultDiv.innerHTML = '<span class="match">✓ Los textos extraídos son idénticos</span>';
+        } else {
+          resultDiv.innerHTML = '<span class="no-match">✗ Los textos extraídos son diferentes</span>';
+        }
 
-      readerLeft.readAsText(leftFile);
+        // Show modal
+        modal.style.display = 'block';
+
+      } catch (error) {
+        alert('Error al procesar los archivos: ' + error.message);
+      } finally {
+        // Reset button
+        this.disabled = false;
+        this.textContent = 'Comparar';
+      }
     });
   </script>
 </body>
