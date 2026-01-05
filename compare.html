@@ -108,8 +108,6 @@
   </div>
 
   <script>
-    const BACKEND_URL = 'http://localhost:3000'; // Cambiar en producción
-
     document.getElementById('left-file').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (file) {
@@ -126,7 +124,7 @@
       }
     });
 
-    document.getElementById('compare-btn').addEventListener('click', async function() {
+    document.getElementById('compare-btn').addEventListener('click', function() {
       const leftFile = document.getElementById('left-file').files[0];
       const rightFile = document.getElementById('right-file').files[0];
 
@@ -135,26 +133,36 @@
         return;
       }
 
-      const formData = new FormData();
-      formData.append('leftFile', leftFile);
-      formData.append('rightFile', rightFile);
+      // Check if both are .txt
+      const leftExt = leftFile.name.split('.').pop().toLowerCase();
+      const rightExt = rightFile.name.split('.').pop().toLowerCase();
 
-      try {
-        const response = await fetch(`${BACKEND_URL}/compare/upload`, {
-          method: 'POST',
-          body: formData
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          alert('Archivos subidos correctamente para comparación.');
-        } else {
-          alert('Error al subir archivos: ' + result.error);
-        }
-      } catch (error) {
-        alert('Error de conexión: ' + error.message);
+      if (leftExt !== 'txt' || rightExt !== 'txt') {
+        alert('Solo se pueden comparar archivos .txt. Por favor selecciona archivos de texto.');
+        return;
       }
+
+      // Read and compare
+      const readerLeft = new FileReader();
+      const readerRight = new FileReader();
+
+      readerLeft.onload = function(e) {
+        const contentLeft = e.target.result;
+
+        readerRight.onload = function(e) {
+          const contentRight = e.target.result;
+
+          if (contentLeft === contentRight) {
+            alert('Los documentos son idénticos.');
+          } else {
+            alert('Los documentos son diferentes.');
+          }
+        };
+
+        readerRight.readAsText(rightFile);
+      };
+
+      readerLeft.readAsText(leftFile);
     });
   </script>
 </body>
