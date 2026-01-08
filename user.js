@@ -47,13 +47,18 @@ fileUpload.addEventListener('click', async () => {
     const filePaths = await ipcRenderer.invoke('select-file');
 
     if (filePaths && filePaths.length > 0) {
-      const folders = await ipcRenderer.invoke('list-folders');
-
       for (const p of filePaths) {
-        const folderId = await chooseFolderForFile(p, folders);
-        showStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
-        await ipcRenderer.invoke('upload-file', p, folderId);
-        showStatus(`¡${pathBasename(p)} subido!`, 'success');
+        try {
+          showStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
+          const result = await ipcRenderer.invoke('upload-file', p, null);
+          if (result && result.success) {
+            alert(`¡${pathBasename(p)} subido a No procesado/Albaranes!`);
+          } else {
+            alert(`Error al subir ${pathBasename(p)}`);
+          }
+        } catch (error) {
+          alert(`Error al subir ${pathBasename(p)}: ${error.message}`);
+        }
       }
 
       // Refresh the current folder contents after upload

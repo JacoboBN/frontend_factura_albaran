@@ -120,6 +120,9 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
   const sessionId = store.get('sessionId');
 
   try {
+    // Encontrar o crear la carpeta "No procesado/Albaranes"
+    const uploadFolderId = await getOrCreateAlbaranesFolder(sessionId);
+
     // Support single filePath string or array of paths
     const paths = Array.isArray(filePath) ? filePath : [filePath];
     const results = [];
@@ -127,7 +130,7 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
     for (const p of paths) {
       const formData = new FormData();
       formData.append('sessionId', sessionId);
-      if (targetFolderId) formData.append('targetFolderId', targetFolderId);
+      formData.append('targetFolderId', uploadFolderId);
       formData.append('file', fs.createReadStream(p));
 
       const response = await axios.post(`${BACKEND_URL}/drive/upload`, formData, {
@@ -325,10 +328,44 @@ ipcMain.handle('get-user-link', () => {
   return 'https://tu-sitio.com/DriveShare-Setup.exe?mode=user';
 });
 
+// Función para encontrar o crear la carpeta "No procesado/Albaranes"
+async function getOrCreateAlbaranesFolder(sessionId) {
+  try {
+    // Listar carpetas en la raíz
+    const rootFoldersResp = await axios.post(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId: 'root' });
+    const rootFolders = rootFoldersResp.data.files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
+
+    let noProcesadoFolder = rootFolders.find(f => f.name === 'No procesado');
+
+    if (!noProcesadoFolder) {
+      // Crear "No procesado"
+      const createResp = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: 'No procesado' });
+      noProcesadoFolder = { id: createResp.data.folderId };
+    }
+
+    // Listar contenido de "No procesado"
+    const noProcesadoContentsResp = await axios.post(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId: noProcesadoFolder.id });
+    const noProcesadoContents = noProcesadoContentsResp.data.files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
+
+    let albaranesFolder = noProcesadoContents.find(f => f.name === 'Albaranes');
+
+    if (!albaranesFolder) {
+      // Crear "Albaranes" dentro de "No procesado"
+      const createResp = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: 'Albaranes', parentId: noProcesadoFolder.id });
+      albaranesFolder = { id: createResp.data.folderId };
+    }
+
+    return albaranesFolder.id;
+  } catch (error) {
+    console.error('Error finding or creating Albaranes folder:', error);
+    throw new Error('Error al encontrar o crear carpeta Albaranes');
+  }
+}
+
 // Cerrar sesión
 ipcMain.handle('logout', async () => {
   const sessionId = store.get('sessionId');
-  
+
   try {
     await axios.post(`${BACKEND_URL}/auth/logout`, {
       sessionId
@@ -336,7 +373,7 @@ ipcMain.handle('logout', async () => {
   } catch (error) {
     console.error('Error en logout:', error);
   }
-  
+
   store.clear();
   app.relaunch();
   app.quit();
