@@ -95,7 +95,7 @@
     <div class="section">
       <h2>BD Proveedores</h2>
       <div class="table-container">
-        <table>
+        <table id="proveedores-table">
           <thead>
             <tr>
               <th>Nombre</th>
@@ -115,11 +115,9 @@
     <div class="section">
       <h2>BD Albaranes</h2>
       <div class="table-container">
-        <table>
+        <table id="albaranes-table">
           <thead>
             <tr>
-              <th>CIF Proveedor</th>
-              <th>Proveedor</th>
               <th>Nº albarán</th>
               <th>Artículo</th>
               <th>País</th>
@@ -142,11 +140,9 @@
     <div class="section">
       <h2>BD Facturas</h2>
       <div class="table-container">
-        <table>
+        <table id="facturas-table">
           <thead>
             <tr>
-              <th>CIF Proveedor</th>
-              <th>Proveedor</th>
               <th>Nº factura</th>
               <th>Artículo</th>
               <th>País</th>
@@ -169,11 +165,9 @@
     <div class="section">
       <h2>BD Pedidos</h2>
       <div class="table-container">
-        <table>
+        <table id="pedidos-table">
           <thead>
             <tr>
-              <th>CIF Proveedor</th>
-              <th>Proveedor</th>
               <th>Nº Albarán</th>
               <th>Nº Factura</th>
               <th>Total</th>
@@ -188,5 +182,48 @@
       </div>
     </div>
   </div>
+
+  <script>
+    async function loadData() {
+      const tables = ['proveedores', 'albaranes', 'facturas', 'pedidos'];
+      for (const table of tables) {
+        try {
+          const response = await fetch(`http://localhost:3000/api/bd/${table}`);
+          if (!response.ok) throw new Error(`Error: ${response.status}`);
+          const data = await response.json();
+          populateTable(table, data);
+        } catch (error) {
+          console.error(`Error loading ${table}:`, error);
+          // Optionally show error in UI
+        }
+      }
+    }
+
+    function populateTable(tableName, data) {
+      const tbody = document.querySelector(`#${tableName}-table tbody`);
+      tbody.innerHTML = ''; // Clear existing rows
+      data.forEach(row => {
+        const tr = document.createElement('tr');
+        Object.values(row).forEach(value => {
+          const td = document.createElement('td');
+          if (typeof value === 'string' && value.startsWith('http')) {
+            // Make URLs clickable
+            const a = document.createElement('a');
+            a.href = value;
+            a.target = '_blank';
+            a.textContent = 'Ver';
+            td.appendChild(a);
+          } else {
+            td.textContent = value;
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Load data when page loads
+    window.addEventListener('DOMContentLoaded', loadData);
+  </script>
 </body>
 </html>
