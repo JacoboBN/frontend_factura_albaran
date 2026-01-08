@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ver BD</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border: 1px solid #ccc;
+      max-width: 1200px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+
+    .section {
+      margin-bottom: 40px;
+    }
+
+    .section h2 {
+      margin-bottom: 20px;
+      color: #333;
+    }
+
+    .table-container {
+      overflow-x: auto;
+      border: 1px solid #ccc;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 800px; /* Ensure minimum width for scroll */
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 10px;
+      text-align: left;
+    }
+
+    th {
+      background: #f8f9fa;
+      font-weight: bold;
+    }
+
+    .btn {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      margin: 10px 0;
+    }
+
+    .back-btn {
+      display: block;
+      text-decoration: none;
+      width: fit-content;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Ver BD</h1>
+      <a href="user.html" class="btn back-btn">Volver</a>
+    </div>
+
+    <div class="section">
+      <h2>BD Proveedores</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Dirección</th>
+              <th>CIF</th>
+              <th>Tlf</th>
+              <th>RSA</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Datos aquí -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>BD Albaranes</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>CIF Proveedor</th>
+              <th>Proveedor</th>
+              <th>Nº albarán</th>
+              <th>Artículo</th>
+              <th>País</th>
+              <th>Bulto</th>
+              <th>KG</th>
+              <th>Precio por KG</th>
+              <th>Precio por bulto</th>
+              <th>Importe</th>
+              <th>URL Drive</th>
+              <th>¿Procesado?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Datos aquí -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>BD Facturas</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>CIF Proveedor</th>
+              <th>Proveedor</th>
+              <th>Nº factura</th>
+              <th>Artículo</th>
+              <th>País</th>
+              <th>Bulto</th>
+              <th>KG</th>
+              <th>Precio por KG</th>
+              <th>Precio por bulto</th>
+              <th>Importe</th>
+              <th>URL Drive</th>
+              <th>¿Coincide?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Datos aquí -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>BD Pedidos</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>CIF Proveedor</th>
+              <th>Proveedor</th>
+              <th>Nº Albarán</th>
+              <th>Nº Factura</th>
+              <th>Total</th>
+              <th>% IVA</th>
+              <th>IVA</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Datos aquí -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
