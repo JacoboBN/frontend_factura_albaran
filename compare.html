@@ -180,51 +180,41 @@
   <div class="container">
     <div class="header">
       <a href="user.html" class="back-btn">← Atrás</a>
-      <h1>Comparar</h1>
-      <p style="color: #666;">Sube dos documentos para comparar</p>
+      <h1>Analizar Documento</h1>
+      <p style="color: #666;">Sube un documento para obtener un resumen con IA</p>
     </div>
 
-    <div class="compare-form">
-      <div class="file-upload" onclick="document.getElementById('left-file').click()">
+    <div class="upload-section">
+      <div class="file-upload" onclick="document.getElementById('document-file').click()">
         <div class="file-icon">📄</div>
-        <p>Documento izquierdo</p>
-        <input type="file" id="left-file">
-      </div>
-
-      <div class="file-upload" onclick="document.getElementById('right-file').click()">
-        <div class="file-icon">📄</div>
-        <p>Documento derecho</p>
-        <input type="file" id="right-file">
+        <p>Seleccionar documento</p>
+        <input type="file" id="document-file">
       </div>
     </div>
 
-    <button class="btn" id="compare-btn">Comparar</button>
+    <button class="btn" id="analyze-btn">Analizar</button>
   </div>
 
-  <!-- Modal for displaying OCR results -->
-  <div id="comparison-modal" class="modal">
+  <!-- Modal for displaying analysis results -->
+  <div id="analysis-modal" class="modal">
     <div class="modal-content">
       <span class="close" id="close-modal">&times;</span>
-      <h2>Resultado de la Comparación OCR</h2>
+      <h2>Resumen del Documento</h2>
 
-      <div class="text-comparison">
+      <div class="analysis-result">
         <div class="text-box">
-          <h3>Texto Extraído - Documento Izquierdo</h3>
-          <div id="left-text"></div>
-        </div>
-        <div class="text-box">
-          <h3>Texto Extraído - Documento Derecho</h3>
-          <div id="right-text"></div>
+          <h3>Resumen generado por IA</h3>
+          <div id="summary-text"></div>
         </div>
       </div>
 
-      <div class="comparison-result" id="comparison-result"></div>
+      <div class="analysis-info" id="analysis-info"></div>
     </div>
   </div>
 
   <script>
     // Modal functionality
-    const modal = document.getElementById('comparison-modal');
+    const modal = document.getElementById('analysis-modal');
     const closeBtn = document.getElementById('close-modal');
 
     closeBtn.onclick = function() {
@@ -237,70 +227,30 @@
       }
     }
 
-    // File input handlers
-    document.getElementById('left-file').addEventListener('change', function(e) {
+    // File input handler
+    document.getElementById('document-file').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (file) {
-        const leftUpload = e.target.parentElement;
-        leftUpload.querySelector('p').textContent = file.name;
+        const uploadDiv = e.target.parentElement;
+        uploadDiv.querySelector('p').textContent = file.name;
       }
     });
 
-    document.getElementById('right-file').addEventListener('change', function(e) {
-      const file = e.target.files[0];
-      if (file) {
-        const rightUpload = e.target.parentElement;
-        rightUpload.querySelector('p').textContent = file.name;
-      }
-    });
+    // Main analyze function
+    document.getElementById('analyze-btn').addEventListener('click', async function() {
+      const file = document.getElementById('document-file').files[0];
 
-    // Function to extract text using OCR
-    async function extractText(file) {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      try {
-        const response = await fetch('https://ocr-backend-mf60.onrender.com/ocr', {
-          method: 'POST',
-          body: formData
-        });
-
-        if (!response.ok) {
-          throw new Error(`Error en OCR: ${response.status}`);
-        }
-
-        const result = await response.json();
-        return result.text || '';
-      } catch (error) {
-        console.error('Error extracting text:', error);
-        throw new Error(`Error al extraer texto: ${error.message}`);
-      }
-    }
-
-    // Function to compare texts
-    function compareTexts(text1, text2) {
-      // Normalize texts for comparison (remove extra whitespace, normalize line breaks)
-      const normalize = (text) => text.replace(/\s+/g, ' ').trim().toLowerCase();
-      return normalize(text1) === normalize(text2);
-    }
-
-    // Main compare function
-    document.getElementById('compare-btn').addEventListener('click', async function() {
-      const leftFile = document.getElementById('left-file').files[0];
-      const rightFile = document.getElementById('right-file').files[0];
-
-      if (!leftFile || !rightFile) {
-        alert('Por favor selecciona ambos archivos.');
+      if (!file) {
+        alert('Por favor selecciona un archivo.');
         return;
       }
 
       // Validate file types (PDF, images, or text files)
       const allowedExtensions = ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'tiff', 'txt'];
-      const leftExt = leftFile.name.split('.').pop().toLowerCase();
-      const rightExt = rightFile.name.split('.').pop().toLowerCase();
+      const ext = file.name.split('.').pop().toLowerCase();
 
-      if (!allowedExtensions.includes(leftExt) || !allowedExtensions.includes(rightExt)) {
-        alert('Solo se pueden comparar archivos PDF, imágenes (JPG, PNG, etc.) o archivos de texto.');
+      if (!allowedExtensions.includes(ext)) {
+        alert('Solo se pueden analizar archivos PDF, imágenes (JPG, PNG, etc.) o archivos de texto.');
         return;
       }
 
@@ -309,35 +259,36 @@
       this.textContent = 'Procesando...';
 
       try {
-        // Extract text from both files
-        const [leftText, rightText] = await Promise.all([
-          extractText(leftFile),
-          extractText(rightFile)
-        ]);
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('http://localhost:3000/analyze/document', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          throw new Error(`Error en análisis: ${response.status}`);
+        }
+
+        const result = await response.json();
 
         // Display results in modal
-        document.getElementById('left-text').textContent = leftText || 'No se pudo extraer texto';
-        document.getElementById('right-text').textContent = rightText || 'No se pudo extraer texto';
-
-        // Compare texts
-        const isMatch = compareTexts(leftText, rightText);
-        const resultDiv = document.getElementById('comparison-result');
-
-        if (isMatch) {
-          resultDiv.innerHTML = '<span class="match">✓ Los textos extraídos son idénticos</span>';
-        } else {
-          resultDiv.innerHTML = '<span class="no-match">✗ Los textos extraídos son diferentes</span>';
-        }
+        document.getElementById('summary-text').textContent = result.summary || 'No se pudo generar resumen';
+        document.getElementById('analysis-info').innerHTML = `
+          <p><strong>Calidad OCR:</strong> ${(result.ocrQuality * 100).toFixed(1)}%</p>
+          <p><strong>Modelo usado:</strong> ${result.modelUsed}</p>
+        `;
 
         // Show modal
         modal.style.display = 'block';
 
       } catch (error) {
-        alert('Error al procesar los archivos: ' + error.message);
+        alert('Error al analizar el archivo: ' + error.message);
       } finally {
         // Reset button
         this.disabled = false;
-        this.textContent = 'Comparar';
+        this.textContent = 'Analizar';
       }
     });
   </script>
