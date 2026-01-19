@@ -200,19 +200,25 @@
 
     async function initDatabase() {
       try {
+        console.log('Starting database initialization...');
+        
         // Initialize SQL.js
         const SQL = await initSqlJs({
           locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
         });
+        console.log('SQL.js initialized');
 
         // Fetch the SQL schema file
         const response = await fetch('../BDs/database.sql');
-        if (!response.ok) throw new Error('Could not load database schema');
+        console.log('Fetch response status:', response.status);
+        if (!response.ok) throw new Error(`Could not load database schema: ${response.status}`);
         const sqlText = await response.text();
+        console.log('SQL text loaded, length:', sqlText.length);
 
         // Create database and execute schema
         db = new SQL.Database();
         db.run(sqlText);
+        console.log('Database schema executed');
 
         console.log('Database initialized successfully');
         loadData();
@@ -224,13 +230,16 @@
             <h2>Error loading database</h2>
             <p>Please ensure the BDs/database.sql file exists and is accessible.</p>
             <p>Error: ${error.message}</p>
+            <p>Check browser console for more details.</p>
           </div>
         `;
       }
     }
 
     function loadData() {
+      console.log('Loading data from database...');
       const tables = ['proveedores', 'albaranes', 'facturas', 'pedidos'];
+      
       tables.forEach(tableName => {
         try {
           let query = '';
@@ -244,7 +253,10 @@
             query = 'SELECT id, cif_proveedor, proveedor, num_albaran, fecha_albaran, num_factura, fecha_factura, total, iva_porcentaje, iva_importe FROM pedidos';
           }
 
+          console.log(`Executing query for ${tableName}:`, query);
           const result = db.exec(query);
+          console.log(`Result for ${tableName}:`, result);
+          
           const data = result.length > 0 ? result[0].values.map(row =>
             result[0].columns.reduce((obj, col, index) => {
               obj[col] = row[index];
@@ -252,6 +264,7 @@
             }, {})
           ) : [];
 
+          console.log(`Data for ${tableName}:`, data);
           populateTable(tableName, data);
         } catch (error) {
           console.error(`Error loading ${tableName}:`, error);
@@ -262,10 +275,15 @@
     function populateTable(tableName, data) {
       const tbody = document.querySelector(`#${tableName}-table tbody`);
       tbody.innerHTML = ''; // Clear existing rows
+      
+      const headers = Array.from(document.querySelector(`#${tableName}-table thead th`)).map(th => th.textContent);
+      
       data.forEach(row => {
         const tr = document.createElement('tr');
-        Object.values(row).forEach(value => {
+        headers.forEach(header => {
           const td = document.createElement('td');
+          let value = row[header] || '';
+          
           if (typeof value === 'string' && value.startsWith('http')) {
             // Make URLs clickable
             const a = document.createElement('a');
