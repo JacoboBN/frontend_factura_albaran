@@ -4,12 +4,110 @@ const Store = require('electron-store');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
+const { execFile } = require('child_process');
+const os = require('os');
+const { v4: uuidv4 } = require('uuid');
+
+// URL del backend en Render (siempre usa esta URL ya que el backend está en producción)
+const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
+
+// Helper function to get binary paths
+function getBinaryPaths() {
+  // In production, binaries are in process.resourcesPath/bin
+  // In development, they are in the assets folder
+  const isPackaged = app.isPackaged;
+  const basePath = isPackaged
+    ? path.join(process.resourcesPath, 'bin')
+    : path.join(__dirname, 'assets', 'bin', 'win');
+
+  return {
+    tesseract: path.join(basePath, 'tesseract', 'tesseract.exe'),
+    tessdata: path.join(basePath, 'tesseract', 'tessdata'),
+    pdftoppm: path.join(basePath, 'poppler', 'pdftoppm.exe')
+  };
+}
+
+// Local OCR function using embedded Tesseract and Poppler
+async function performLocalOCR(filePath, mimeType, originalName) {
+  const tempDir = os.tmpdir();
+  const jobId = uuidv4();
+  const workDir = path.join(tempDir, `electron-ocr-${jobId}`);
+  fs.mkdirSync(workDir, { recursive: true });
+
+  const binaryPaths = getBinaryPaths();
+
+  try {
+    const isPdf = mimeType === "application/pdf" || originalName.toLowerCase().endsWith(".pdf");
+    let imagePaths = [];
+
+    if (isPdf) {
+      // Convert PDF pages to PNG using embedded pdftoppm
+      const baseName = `pdf-${jobId}`;
+      const outPrefix = path.join(workDir, baseName);
+      await new Promise((resolve, reject) => {
+        execFile(binaryPaths.pdftoppm, ["-png", filePath, outPrefix], (err, stdout, stderr) => {
+          if (err) return reject(new Error(`PDF conversion failed: ${stderr || err.message}`));
+          const files = fs.readdirSync(workDir)
+            .filter(f => f.startsWith(baseName + "-") && f.endsWith(".png"))
+            .map(f => path.join(workDir, f))
+            .sort((a,b) => a.localeCompare(b, undefined, { numeric: true }));
+          imagePaths = files;
+          resolve();
+        });
+      });
+      if (!imagePaths.length) throw new Error("No pages rendered from PDF");
+    } else {
+      imagePaths = [filePath];
+    }
+
+    const pageTexts = [];
+    let totalConfidence = 0;
+    let pageCount = 0;
+
+    for (let i = 0; i < imagePaths.length; i++) {
+      const imagePath = imagePaths[i];
+
+      // Run Tesseract OCR using embedded binary
+      const outputBase = path.join(workDir, `tesseract-${jobId}-${i}`);
+      await new Promise((resolve, reject) => {
+        const env = { ...process.env, TESSDATA_PREFIX: binaryPaths.tessdata };
+        execFile(binaryPaths.tesseract, [imagePath, outputBase, '-l', 'spa'], { env }, (err, stdout, stderr) => {
+          if (err) return reject(new Error(`Tesseract OCR failed: ${stderr || err.message}`));
+          resolve();
+        });
+      });
+
+      // Read the output text file
+      const textFile = outputBase + '.txt';
+      if (!fs.existsSync(textFile)) {
+        throw new Error(`Tesseract did not generate output file for page ${i + 1}`);
+      }
+
+      const text = fs.readFileSync(textFile, 'utf8').trim();
+      pageTexts.push({ page: i + 1, text });
+
+      // Estimate quality based on text length (simple heuristic)
+      totalConfidence += Math.min(text.trim().length / 500, 1);
+      pageCount++;
+    }
+
+    const averageQuality = pageCount > 0 ? totalConfidence / pageCount : 0;
+
+    // Clean up
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+
+    return {
+      text: pageTexts.map(p => `--- PAGE ${p.page} ---\n${p.text}`).join("\n\n"),
+      quality: averageQuality
+    };
+  } catch (e) {
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+    throw e;
+  }
+}
 
 const store = new Store();
 let mainWindow;
-
-// URL del backend en Render (CAMBIAR POR TU URL)
-const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -361,6 +459,25 @@ async function getOrCreateAlbaranesFolder(sessionId) {
     throw new Error('Error al encontrar o crear carpeta Albaranes');
   }
 }
+
+// Analyze document with local OCR and AI analysis
+ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalName) => {
+  try {
+    // Perform local OCR
+    const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
+
+    // Send extracted text to backend for AI analysis
+    const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
+      text: ocrResult.text,
+      quality: ocrResult.quality
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error analyzing document:', error);
+    throw new Error(error.response?.data?.error || 'Error al analizar el documento');
+  }
+});
 
 // Cerrar sesión
 ipcMain.handle('logout', async () => {
