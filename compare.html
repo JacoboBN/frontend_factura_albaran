@@ -259,25 +259,41 @@
       this.textContent = 'Procesando...';
 
       try {
-        const formData = new FormData();
-        formData.append('file', file);
 
-        // const response = await fetch('http://localhost:10000/analyze/document', {
+          const { ipcRenderer } = require('electron');
+
+          const file = document.getElementById('document-file').files[0];
+          if (!file) { alert('Selecciona un archivo'); return; }
+
+          // En Electron, File tiene ruta local
+          const filePath = file.path;
+          const mimeType = file.type || '';
+          const originalName = file.name;
+
+          const result = await ipcRenderer.invoke('analyze-document', filePath, mimeType, originalName);
+
+
+
+
+        // const formData = new FormData();
+        // formData.append('file', file);
+
+        // // const response = await fetch('http://localhost:10000/analyze/document', {
+        // //   method: 'POST',
+        // //   body: formData
+        // // });
+
+        // const response = await fetch('https://backend-factura-albaran.onrender.com/analyze/document', {
         //   method: 'POST',
         //   body: formData
         // });
 
-        const response = await fetch('https://backend-factura-albaran.onrender.com/analyze/document', {
-          method: 'POST',
-          body: formData
-        });
 
+        // if (!response.ok) {
+        //   throw new Error(`Error en análisis: ${response.status}`);
+        // }
 
-        if (!response.ok) {
-          throw new Error(`Error en análisis: ${response.status}`);
-        }
-
-        const result = await response.json();
+        // const result = await response.json();
 
         // Display results in modal
         document.getElementById('analysis-text').textContent = result.analysis || 'No se pudo generar análisis';

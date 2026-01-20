@@ -4,7 +4,7 @@ const Store = require('electron-store');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
-const { execFile } = require('child_process');
+const { spawn } = require('child_process');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 
@@ -27,83 +27,39 @@ function getBinaryPaths() {
   };
 }
 
-// Local OCR function using embedded Tesseract and Poppler
+// Local OCR function using Python script with easyocr and PyMuPDF
 async function performLocalOCR(filePath, mimeType, originalName) {
-  const tempDir = os.tmpdir();
-  const jobId = uuidv4();
-  const workDir = path.join(tempDir, `electron-ocr-${jobId}`);
-  fs.mkdirSync(workDir, { recursive: true });
+  return new Promise((resolve, reject) => {
+    const pythonProcess = spawn('python', ['ocr.py', filePath], { cwd: __dirname });
 
-  const binaryPaths = getBinaryPaths();
+    let stdout = '';
+    let stderr = '';
 
-  try {
-    const isPdf = mimeType === "application/pdf" || originalName.toLowerCase().endsWith(".pdf");
-    let imagePaths = [];
+    pythonProcess.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
 
-    if (isPdf) {
-      // Convert PDF pages to PNG using embedded pdftoppm
-      const baseName = `pdf-${jobId}`;
-      const outPrefix = path.join(workDir, baseName);
-      await new Promise((resolve, reject) => {
-        execFile(binaryPaths.pdftoppm, ["-png", filePath, outPrefix], (err, stdout, stderr) => {
-          if (err) return reject(new Error(`PDF conversion failed: ${stderr || err.message}`));
-          const files = fs.readdirSync(workDir)
-            .filter(f => f.startsWith(baseName + "-") && f.endsWith(".png"))
-            .map(f => path.join(workDir, f))
-            .sort((a,b) => a.localeCompare(b, undefined, { numeric: true }));
-          imagePaths = files;
-          resolve();
-        });
-      });
-      if (!imagePaths.length) throw new Error("No pages rendered from PDF");
-    } else {
-      imagePaths = [filePath];
-    }
+    pythonProcess.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
 
-    const pageTexts = [];
-    let totalConfidence = 0;
-    let pageCount = 0;
-
-    for (let i = 0; i < imagePaths.length; i++) {
-      const imagePath = imagePaths[i];
-
-      // Run Tesseract OCR using embedded binary
-      const outputBase = path.join(workDir, `tesseract-${jobId}-${i}`);
-      await new Promise((resolve, reject) => {
-        const env = { ...process.env, TESSDATA_PREFIX: binaryPaths.tessdata };
-        execFile(binaryPaths.tesseract, [imagePath, outputBase, '-l', 'spa'], { env }, (err, stdout, stderr) => {
-          if (err) return reject(new Error(`Tesseract OCR failed: ${stderr || err.message}`));
-          resolve();
-        });
-      });
-
-      // Read the output text file
-      const textFile = outputBase + '.txt';
-      if (!fs.existsSync(textFile)) {
-        throw new Error(`Tesseract did not generate output file for page ${i + 1}`);
+    pythonProcess.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`OCR failed: ${stderr}`));
+      } else {
+        try {
+          const result = JSON.parse(stdout);
+          if (result.error) {
+            reject(new Error(result.error));
+          } else {
+            resolve(result);
+          }
+        } catch (e) {
+          reject(new Error('Invalid JSON output from OCR'));
+        }
       }
-
-      const text = fs.readFileSync(textFile, 'utf8').trim();
-      pageTexts.push({ page: i + 1, text });
-
-      // Estimate quality based on text length (simple heuristic)
-      totalConfidence += Math.min(text.trim().length / 500, 1);
-      pageCount++;
-    }
-
-    const averageQuality = pageCount > 0 ? totalConfidence / pageCount : 0;
-
-    // Clean up
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-
-    return {
-      text: pageTexts.map(p => `--- PAGE ${p.page} ---\n${p.text}`).join("\n\n"),
-      quality: averageQuality
-    };
-  } catch (e) {
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-    throw e;
-  }
+    });
+  });
 }
 
 const store = new Store();
@@ -462,6 +418,8 @@ async function getOrCreateAlbaranesFolder(sessionId) {
 
 // Analyze document with local OCR and AI analysis
 ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalName) => {
+  const sessionId = store.get('sessionId');
+
   try {
     // Perform local OCR
     const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
@@ -469,7 +427,8 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
     // Send extracted text to backend for AI analysis
     const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
       text: ocrResult.text,
-      quality: ocrResult.quality
+      quality: ocrResult.quality,
+      sessionId: sessionId
     });
 
     return response.data;
