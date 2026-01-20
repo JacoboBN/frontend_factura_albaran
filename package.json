@@ -38,7 +38,14 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "assets/bin/win",
+        "to": "bin",
+        "filter": ["**/*"]
+      }
+    ]
   },
   "dependencies": {
     "electron-store": "^8.1.0",
