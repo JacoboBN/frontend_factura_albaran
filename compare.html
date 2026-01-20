@@ -180,8 +180,8 @@
   <div class="container">
     <div class="header">
       <a href="user.html" class="back-btn">← Atrás</a>
-      <h1>Analizar Documento</h1>
-      <p style="color: #666;">Sube un documento para obtener un resumen con IA</p>
+      <h1>Analizar Documento con IA</h1>
+      <p style="color: #666;">Sube un documento para obtener OCR y análisis con IA</p>
     </div>
 
     <div class="upload-section">
@@ -199,12 +199,12 @@
   <div id="analysis-modal" class="modal">
     <div class="modal-content">
       <span class="close" id="close-modal">&times;</span>
-      <h2>Resumen del Documento</h2>
+      <h2>Análisis del Documento con IA</h2>
 
       <div class="analysis-result">
         <div class="text-box">
-          <h3>Resumen generado por IA</h3>
-          <div id="summary-text"></div>
+          <h3>Análisis generado por IA</h3>
+          <div id="analysis-text"></div>
         </div>
       </div>
 
@@ -280,10 +280,9 @@
         const result = await response.json();
 
         // Display results in modal
-        document.getElementById('summary-text').textContent = result.summary || 'No se pudo generar resumen';
+        document.getElementById('analysis-text').textContent = result.analysis || 'No se pudo generar análisis';
         document.getElementById('analysis-info').innerHTML = `
           <p><strong>Calidad OCR:</strong> ${(result.ocrQuality * 100).toFixed(1)}%</p>
-          <p><strong>Modelo usado:</strong> ${result.modelUsed}</p>
         `;
 
         // Show modal
