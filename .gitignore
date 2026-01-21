@@ -4,6 +4,7 @@ node_modules/
 
 # Carpeta de construcción
 dist/
+build/
 
 # Environment variables (NUNCA subir al repositorio)
 .env

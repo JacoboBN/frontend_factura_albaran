@@ -18,30 +18,45 @@ function getBinaryPaths() {
     ? path.join(process.resourcesPath, 'bin')
     : path.join(__dirname, 'assets', 'bin', 'win');
 
+  const buildPath = isPackaged
+    ? path.join(process.resourcesPath, 'ocr')
+    : path.join(__dirname, 'ocr');
+
   return {
     tesseract: path.join(basePath, 'tesseract', 'tesseract.exe'),
     tessdata: path.join(basePath, 'tesseract', 'tessdata'),
-    pdftoppm: path.join(basePath, 'poppler', 'pdftoppm.exe')
+    pdftoppm: path.join(basePath, 'poppler', 'pdftoppm.exe'),
+    ocr: path.join(buildPath,  'ocr.exe')
+    // ocr: path.join(buildPath, 'ocr', 'ocr.exe')
   };
 }
 
-// Local OCR function using Python script with easyocr and PyMuPDF
+// Local OCR function using ocr.exe from build folder
 async function performLocalOCR(filePath, mimeType, originalName) {
   return new Promise((resolve, reject) => {
-    const pythonProcess = spawn('python', ['ocr.py', filePath], { cwd: __dirname });
+    const binPaths = getBinaryPaths();
+    const ocrExePath = binPaths.ocr;
+
+    // Verify ocr.exe exists
+    if (!fs.existsSync(ocrExePath)) {
+      reject(new Error(`OCR executable not found at: ${ocrExePath}`));
+      return;
+    }
+
+    const ocrProcess = spawn(ocrExePath, [filePath]);
 
     let stdout = '';
     let stderr = '';
 
-    pythonProcess.stdout.on('data', (data) => {
+    ocrProcess.stdout.on('data', (data) => {
       stdout += data.toString();
     });
 
-    pythonProcess.stderr.on('data', (data) => {
+    ocrProcess.stderr.on('data', (data) => {
       stderr += data.toString();
     });
 
-    pythonProcess.on('close', (code) => {
+    ocrProcess.on('close', (code) => {
       if (code !== 0) {
         reject(new Error(`OCR failed: ${stderr}`));
       } else {
