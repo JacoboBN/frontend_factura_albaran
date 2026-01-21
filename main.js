@@ -5,8 +5,6 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const { spawn } = require('child_process');
-const os = require('os');
-const { v4: uuidv4 } = require('uuid');
 
 // URL del backend en Render (siempre usa esta URL ya que el backend está en producción)
 const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
