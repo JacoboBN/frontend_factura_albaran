@@ -1,6 +1,6 @@
 {
   "name": "driveshare-app",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "DriveShare - App de escritorio",
   "main": "main.js",
   "scripts": {
@@ -43,7 +43,9 @@
       {
         "from": "assets/bin/win",
         "to": "bin",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "ocr/ocr.exe",
@@ -59,5 +61,4 @@
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1"
   }
-  
 }
