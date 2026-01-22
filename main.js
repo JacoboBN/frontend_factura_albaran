@@ -1,10 +1,17 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
+const log = require('electron-log');
 const path = require('path');
 const Store = require('electron-store');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const { spawn } = require('child_process');
+
+// Configurar logging para actualizaciones
+log.transports.file.level = 'info';
+autoUpdater.logger = log;
+autoUpdater.autoDownload = true;
 
 // URL del backend en Render (siempre usa esta URL ya que el backend está en producción)
 const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
@@ -92,7 +99,47 @@ function createWindow() {
   mainWindow.loadFile('user.html');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+
+  // Verificar actualizaciones disponibles
+  autoUpdater.checkForUpdatesAndNotify();
+
+  // Event listeners para actualizaciones
+  autoUpdater.on('checking-for-update', () => {
+    log.info('Checking for update...');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    log.info('Update available', info);
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    log.info('Update not available', info);
+  });
+
+  autoUpdater.on('error', (err) => {
+    log.error('Updater error', err);
+  });
+
+  autoUpdater.on('download-progress', (p) => {
+    log.info('Download progress', p);
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    log.info('Update downloaded; will install now');
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'info',
+        buttons: ['Reiniciar ahora', 'Luego'],
+        title: 'Actualización lista',
+        message: 'Se descargó una actualización. ¿Quieres reiniciar para instalarla?'
+      })
+      .then((r) => {
+        if (r.response === 0) autoUpdater.quitAndInstall();
+      });
+  });
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
