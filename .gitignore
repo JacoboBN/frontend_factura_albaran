@@ -2,6 +2,7 @@
 node_modules/
 # package-lock.json
 .exe
+ocr/
 
 # Carpeta de construcción
 dist/
