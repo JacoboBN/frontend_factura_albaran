@@ -36,7 +36,6 @@ jobs:
           files: |
             dist/*.exe
             dist/*.blockmap
-            dist/latest.yml
             dist/*.yml
 
 
