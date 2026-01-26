@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DriveShare - Usuario</title>
+  <title>DriveShare - Usuario final</title>
   <style>
     * {
       margin: 0;
@@ -140,16 +140,20 @@
 <body>
     <div class="container">
       <div class="header">
-        <h1>BG</h1>
+        <h1>BGO</h1>
         <p style="color: #666;">Sube archivos</p>
       </div>
+
+      <div id="status" class="status"></div>
+
 
     <!-- Login Section -->
     <div class="section active" id="login-section">
       <div class="login-section">
         <p style="margin-bottom: 20px; color: #666;">Inicia sesión con Google para comenzar</p>
         <button class="btn" id="login-btn">Iniciar sesión con Google</button>
-        <div id="status" class="status"></div>
+        <div class="section active" id="login-section"></div>
+
       </div>
     </div>
 
@@ -181,8 +185,8 @@
             <div class="actions">
               <input id="create-folder-name" placeholder="Nombre nueva carpeta" />
               <button class="btn" id="create-folder-btn">Crear</button>
-              <input id="share-emails" placeholder="emails, separados por coma" />
-              <button class="btn" id="share-btn">Compartir</button>
+              <!-- <input id="share-emails" placeholder="emails, separados por coma" />
+              <button class="btn" id="share-btn">Compartir</button> -->
               <a href="compare.html"><button class="btn">Comparar</button></a>
               <a href="bd.html"><button class="btn">Ver BD</button></a>
             </div>
@@ -200,7 +204,7 @@
             <div id="files-list" class="files-grid"></div>
           </section>
 
-          <div id="status" class="status"></div>
+          <div class="section" id="upload-section">...</div>
         </main>
       </div>
     </div>

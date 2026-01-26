@@ -39,7 +39,7 @@ async function checkSession() {
   }
 }
 
-// Nota: el login se gestiona en index.html. Esta página solo muestra la UI principal.
+// Nota: el login se gestiona en user.html. Esta página solo muestra la UI principal.
 
 // Subir archivo
 fileUpload.addEventListener('click', async () => {
@@ -477,15 +477,15 @@ logoutBtn.addEventListener('click', async () => {
 });
 // (showUploadSection está implementada arriba con navegación mejorada)
 
-// Mostrar mensajes de estado
+
 function showStatus(message, type) {
   const status = document.getElementById('status');
   status.textContent = message;
   status.className = `status ${type}`;
+  status.style.display = 'block';
 
   if (type === 'success' || type === 'error') {
-    setTimeout(() => {
-      status.style.display = 'none';
-    }, 5000);
+    setTimeout(() => { status.style.display = 'none'; }, 5000);
   }
 }
+
