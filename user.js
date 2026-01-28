@@ -350,63 +350,89 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
     const docs = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
 
     const folderTree = document.getElementById('folder-tree');
+    const folderSummary = document.getElementById('folder-summary');
     const filesList = document.getElementById('files-list');
 
-    // Render full folder tree
+    // Render full folder tree (if present)
     if (folderTree && folderTreeData) {
       renderFolderTree(folderTree, folderTreeData, currentFolderId);
     }
 
-    // Render files as tiles
+    // Render lightweight summary instead of full file list
+    const currentName = (breadcrumb[breadcrumb.length - 1] && breadcrumb[breadcrumb.length - 1].name)
+      ? breadcrumb[breadcrumb.length - 1].name
+      : (folderName || 'Mi unidad');
+    const total = files.length;
+    const folderCount = folders.length;
+    const fileCount = docs.length;
+    if (folderSummary) {
+      const summaryHtml = `
+        <h4 style="margin-bottom:8px;">${currentName}</h4>
+        <p style="color:#555; margin-bottom:6px;">Contenido total: <strong>${total}</strong></p>
+        <p style="color:#666; margin-bottom:4px;">Carpetas: <strong>${folderCount}</strong></p>
+        <p style="color:#666;">Archivos: <strong>${fileCount}</strong></p>
+      `;
+
+      folderSummary.innerHTML = summaryHtml;
+    }
+
+    const showFiles = ['facturas', 'albaranes'].includes((currentName || '').toLowerCase());
+
     if (filesList) {
-      filesList.innerHTML = '';
-      const items = [...folders, ...docs];
-      if (items.length === 0) {
-        filesList.innerHTML = '<p style="color:#666">Esta carpeta está vacía</p>';
-      }
-
-      items.forEach(item => {
-        const tile = document.createElement('div');
-        tile.className = 'file-tile';
-        const isFolder = item.mimeType === 'application/vnd.google-apps.folder';
-
-        const icon = document.createElement('div');
-        icon.textContent = isFolder ? '📁' : '📄';
-        icon.style.fontSize = '20px';
-
-        const name = document.createElement('div');
-        name.className = 'name';
-        name.textContent = item.name;
-
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.textContent = isFolder ? 'Carpeta' : `${item.mimeType || ''} ${formatBytes(item.size)}`;
-
-        const actions = document.createElement('div');
-        actions.style.marginTop = 'auto';
-        if (isFolder) {
-          const openBtn = document.createElement('button');
-          openBtn.className = 'btn small';
-          openBtn.textContent = 'Abrir';
-          openBtn.addEventListener('click', () => loadFolderContents(item.id, true, item.name));
-          actions.appendChild(openBtn);
-        } else {
-          const openBtn = document.createElement('button');
-          openBtn.className = 'btn small';
-          openBtn.textContent = 'Abrir';
-          openBtn.addEventListener('click', () => {
-            const url = `https://drive.google.com/file/d/${item.id}/view`;
-            ipcRenderer.invoke('open-external', url);
-          });
-          actions.appendChild(openBtn);
+      if (!showFiles) {
+        filesList.innerHTML = '';
+        filesList.style.display = 'none';
+      } else {
+        filesList.style.display = '';
+        filesList.innerHTML = '';
+        const items = [...folders, ...docs];
+        if (items.length === 0) {
+          filesList.innerHTML = '<p style="color:#666">Esta carpeta está vacía</p>';
         }
 
-        tile.appendChild(icon);
-        tile.appendChild(name);
-        tile.appendChild(meta);
-        tile.appendChild(actions);
-        filesList.appendChild(tile);
-      });
+        items.forEach(item => {
+          const tile = document.createElement('div');
+          tile.className = 'file-tile';
+          const isFolder = item.mimeType === 'application/vnd.google-apps.folder';
+
+          const icon = document.createElement('div');
+          icon.textContent = isFolder ? '📁' : '📄';
+          icon.style.fontSize = '20px';
+
+          const name = document.createElement('div');
+          name.className = 'name';
+          name.textContent = item.name;
+
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = isFolder ? 'Carpeta' : `${item.mimeType || ''} ${formatBytes(item.size)}`;
+
+          const actions = document.createElement('div');
+          actions.style.marginTop = 'auto';
+          if (isFolder) {
+            const openBtn = document.createElement('button');
+            openBtn.className = 'btn small';
+            openBtn.textContent = 'Abrir';
+            openBtn.addEventListener('click', () => loadFolderContents(item.id, true, item.name));
+            actions.appendChild(openBtn);
+          } else {
+            const openBtn = document.createElement('button');
+            openBtn.className = 'btn small';
+            openBtn.textContent = 'Abrir';
+            openBtn.addEventListener('click', () => {
+              const url = `https://drive.google.com/file/d/${item.id}/view`;
+              ipcRenderer.invoke('open-external', url);
+            });
+            actions.appendChild(openBtn);
+          }
+
+          tile.appendChild(icon);
+          tile.appendChild(name);
+          tile.appendChild(meta);
+          tile.appendChild(actions);
+          filesList.appendChild(tile);
+        });
+      }
     }
 
   } catch (err) {
