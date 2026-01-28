@@ -6,6 +6,8 @@ const uploadSection = document.getElementById('upload-section');
 const loginBtn = document.getElementById('login-btn');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
+const menuButtons = document.querySelectorAll('.menu-item');
+const tileButtons = document.querySelectorAll('.tile');
 
 // Verificar si ya hay sesión
 checkSession();
@@ -41,37 +43,44 @@ async function checkSession() {
 
 // Nota: el login se gestiona en user.html. Esta página solo muestra la UI principal.
 
-// Subir archivo
-fileUpload.addEventListener('click', async () => {
+// Subir archivo a carpeta específica (albaranes o facturas)
+async function uploadFilesToFolder(targetFolderName) {
   try {
     const filePaths = await ipcRenderer.invoke('select-file');
 
     if (filePaths && filePaths.length > 0) {
+      const target = await findFolderByName(targetFolderName);
+      if (!target) {
+        showStatus(`No se encontró la carpeta "${targetFolderName}" en Drive`, 'error');
+        return;
+      }
+
       for (const p of filePaths) {
         try {
           showStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
-          const result = await ipcRenderer.invoke('upload-file', p, null);
+          const result = await ipcRenderer.invoke('upload-file', p, target.id);
           if (result && result.success) {
-            alert(`¡${pathBasename(p)} subido a No procesado/Albaranes!`);
+            showStatus(`¡${pathBasename(p)} subido a ${targetFolderName}!`, 'success');
           } else {
-            alert(`Error al subir ${pathBasename(p)}`);
+            showStatus(`Error al subir ${pathBasename(p)}`, 'error');
           }
         } catch (error) {
-          alert(`Error al subir ${pathBasename(p)}: ${error.message}`);
+          showStatus(`Error al subir ${pathBasename(p)}: ${error.message}`, 'error');
         }
       }
 
-      // Refresh the current folder contents after upload
-      await loadFolderContents(currentFolderId, false);
-
-      setTimeout(() => {
-        document.getElementById('status').style.display = 'none';
-      }, 2000);
+      await loadFolderContents(target.id, true, target.name);
     }
   } catch (error) {
     showStatus('Error al subir archivo: ' + error.message, 'error');
   }
-});
+}
+
+if (fileUpload) {
+  fileUpload.addEventListener('click', async () => {
+    await uploadFilesToFolder('Albaranes');
+  });
+}
 
 // Crear carpeta en Drive (desde UI)
 const createFolderBtn = document.getElementById('create-folder-btn');
@@ -176,7 +185,7 @@ let folderTreeData = null;
 async function loadFolderTree() {
   try {
     const res = await ipcRenderer.invoke('list-folders');
-    const folders = res.folders || [];
+    const folders = Array.isArray(res) ? res : (res.folders || []);
 
     // Build tree structure
     const tree = {};
@@ -210,6 +219,33 @@ async function loadFolderTree() {
     console.error('Error loading folder tree:', err);
     return {};
   }
+}
+
+async function findFolderByName(targetName, rootOnly = false) {
+  try {
+    if (rootOnly) {
+      const res = await ipcRenderer.invoke('list-contents', null);
+      const items = res.files || [];
+      return items.find(item => item.mimeType === 'application/vnd.google-apps.folder'
+        && (item.name || '').toLowerCase() === targetName.toLowerCase()) || null;
+    }
+
+    const res = await ipcRenderer.invoke('list-folders');
+    const folders = Array.isArray(res) ? res : (res.folders || []);
+    return folders.find(f => (f.name || '').toLowerCase() === targetName.toLowerCase()) || null;
+  } catch (err) {
+    console.error('Error buscando carpeta:', err);
+    return null;
+  }
+}
+
+async function navigateToFolderByName(targetName, rootOnly = false) {
+  const folder = await findFolderByName(targetName, rootOnly);
+  if (!folder) {
+    showStatus(`No se encontró la carpeta "${targetName}" en Drive`, 'error');
+    return;
+  }
+  await loadFolderContents(folder.id, true, folder.name);
 }
 
 function renderFolderTree(container, tree, currentFolderId, level = 0) {
@@ -439,6 +475,51 @@ async function showUploadSection(info) {
   await refreshSharedLists();
 }
 
+// Enlazar botones de menú lateral
+menuButtons.forEach(button => {
+  button.addEventListener('click', async () => {
+    const action = button.dataset.action;
+    if (action === 'open-albaranes') {
+      await navigateToFolderByName('Albaranes', true);
+      return;
+    }
+    if (action === 'open-facturas') {
+      await navigateToFolderByName('Facturas', true);
+      return;
+    }
+    if (action === 'upload-albaran') {
+      await uploadFilesToFolder('Albaranes', true);
+      return;
+    }
+    if (action === 'upload-factura') {
+      await uploadFilesToFolder('Facturas', true);
+      return;
+    }
+  });
+});
+
+// Enlazar tarjetas principales
+tileButtons.forEach(tile => {
+  tile.addEventListener('click', async () => {
+    const action = tile.dataset.action;
+    if (tile.classList.contains('disabled')) {
+      return;
+    }
+    if (action === 'bases-datos') {
+      window.location.href = 'bd.html';
+      return;
+    }
+    if (action === 'facturas') {
+      await navigateToFolderByName('Facturas', true);
+      return;
+    }
+    if (action === 'albaranes') {
+      await navigateToFolderByName('Albaranes', true);
+      return;
+    }
+  });
+});
+
 function pathBasename(p) {
   try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }
 }
@@ -488,4 +569,3 @@ function showStatus(message, type) {
     setTimeout(() => { status.style.display = 'none'; }, 5000);
   }
 }
-

@@ -10,47 +10,33 @@
       padding: 0;
       box-sizing: border-box;
     }
-    
+
     body {
       font-family: Arial, sans-serif;
       background: #f0f0f0;
       min-height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      padding: 20px;
+      color: #1f1f1f;
     }
 
-    .container {
-      background: white;
-      border: 1px solid #ccc;
-      max-width: 1000px;
-      width: 100%;
-      padding: 20px;
-    }
-    
-    .header {
-      text-align: center;
-      margin-bottom: 30px;
-    }
-    
-    .header h1 {
-      color: #333;
-      margin-bottom: 10px;
-    }
-    
     .section {
       display: none;
     }
-    
+
     .section.active {
       display: block;
     }
-    
+
     .login-section {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
       text-align: center;
+      padding: 24px;
     }
-    
+
     .btn {
       background: #007bff;
       color: white;
@@ -58,78 +44,230 @@
       padding: 10px 20px;
       font-size: 14px;
       cursor: pointer;
-      margin: 5px;
+      border-radius: 6px;
     }
 
     .btn-secondary {
       background: #6c757d;
     }
-    
-    .user-info {
-      background: #f8f9fa;
-      padding: 20px;
-      margin-bottom: 30px;
-      text-align: center;
+
+    .btn.small {
+      padding: 6px 10px;
+      font-size: 13px;
     }
 
-    .file-upload {
-      border: 1px solid #ccc;
+    .app {
+      min-height: 100vh;
+      display: flex;
+      background: #f5f5f5;
+    }
+
+    .sidebar {
+      width: 20%;
+      min-width: 230px;
+      max-width: 280px;
+      background: #d4d4d4;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .profile {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .avatar {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      background: #bcbcbc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+
+    .profile-info {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: #333;
+    }
+
+    .profile-info .label {
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #444;
+    }
+
+    .profile-info .value {
+      font-size: 12px;
+      color: #222;
+      word-break: break-all;
+    }
+
+    .profile-info .placeholder {
+      color: #666;
+    }
+
+    .menu {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .menu-item {
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: none;
+      background: #e0e0e0;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      color: #222;
+    }
+
+    .menu-item:hover {
+      background: #c9c9c9;
+    }
+
+    .panel {
+      background: #efefef;
+      padding: 10px;
+      border-radius: 8px;
+    }
+
+    .folder-tree {
+      max-height: 320px;
+      overflow: auto;
+      padding: 6px 0;
+    }
+
+    .folder-tree div {
+      padding: 6px 8px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .folder-tree div:hover {
+      background: #dcdcdc;
+    }
+
+    .main {
+      flex: 1;
       padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .breadcrumbs {
+      color: #666;
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(160px, 1fr));
+      gap: 16px;
+    }
+
+    .tile {
+      background: #ffffff;
+      border: 1px solid #d1d1d1;
+      border-radius: 12px;
+      padding: 24px;
+      font-size: 16px;
+      font-weight: 600;
       text-align: center;
       cursor: pointer;
-      margin-bottom: 12px;
-    }
-    
-    .file-upload p {
-      color: #666;
-      margin-bottom: 20px;
-      font-size: 18px;
-    }
-    
-    .file-icon {
-      font-size: 40px;
-      margin-bottom: 12px;
     }
 
-    .layout { display:flex; gap:16px; }
-    .sidebar { width:260px; }
-    .main { flex:1; }
-    .panel { background:#fff; padding:10px; margin-top:12px; }
-    .folder-tree { max-height:520px; overflow:auto; padding:6px; }
-    .folder-tree div { padding:8px; cursor:pointer; }
-    .folder-tree div:hover { background:#f0f0f0; }
-    .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-    .nav { display:flex; align-items:center; gap:8px; }
-    .breadcrumbs { color:#666; font-size:13px; }
-    .actions { display:flex; gap:8px; align-items:center; }
-    .actions input { padding:8px; border:1px solid #ccc; }
-    .uploader { margin-top:12px; }
-    .files-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:12px; margin-top:12px; }
-    .file-tile { background:#fff; border:1px solid #ccc; padding:10px; display:flex; flex-direction:column; gap:8px; }
-    .file-tile .name { font-size:14px; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .file-tile .meta { font-size:12px; color:#666; }
-    .btn.small { padding:6px 8px; font-size:13px; }
-    
+    .tile:hover {
+      background: #f0f0f0;
+    }
+
+    .tile.disabled {
+      cursor: not-allowed;
+      background: #f5f5f5;
+      color: #999;
+    }
+
+    .files-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .file-tile {
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-radius: 8px;
+    }
+
+    .file-tile .name {
+      font-size: 14px;
+      color: #333;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-tile .meta {
+      font-size: 12px;
+      color: #666;
+    }
+
     .status {
-      padding: 15px;
-      border-radius: 5px;
-      margin-top: 20px;
+      padding: 12px;
+      border-radius: 8px;
       text-align: center;
       display: none;
     }
-    
+
     .status.success {
       background: #d4edda;
       color: #155724;
       display: block;
     }
-    
+
     .status.error {
       background: #f8d7da;
       color: #721c24;
       display: block;
     }
-    
+
     .status.loading {
       background: #d1ecf1;
       color: #0c5460;
@@ -138,42 +276,39 @@
   </style>
 </head>
 <body>
-    <div class="container">
-      <div class="header">
-        <h1>BGO</h1>
-        <p style="color: #666;">Sube archivos</p>
-      </div>
-
-      <div id="status" class="status"></div>
-
+    <div id="status" class="status"></div>
 
     <!-- Login Section -->
     <div class="section active" id="login-section">
       <div class="login-section">
-        <p style="margin-bottom: 20px; color: #666;">Inicia sesión con Google para comenzar</p>
+        <h1>BGO</h1>
+        <p style="color: #666;">Inicia sesión con Google para comenzar</p>
         <button class="btn" id="login-btn">Iniciar sesión con Google</button>
-        <div class="section active" id="login-section"></div>
-
       </div>
     </div>
 
     <!-- Upload Section with folder browser -->
     <div class="section" id="upload-section">
-      <div class="layout">
+      <div class="app">
         <aside class="sidebar">
-          <div class="user-info small">
-            <h4 style="margin-bottom:6px;">Conectado como</h4>
-            <p style="color:#666; font-size:13px;"><span id="user-email"></span></p>
-            <button class="btn btn-secondary small" id="logout-btn" style="margin-top:8px;">Cerrar sesión</button>
-          </div>
-
-          <div class="panel">
-            <h4>CARPETAS</h4>
-            <div id="sidebar-path" class="breadcrumbs" style="margin-bottom:8px; color:#444; font-size:13px;"></div>
-            <div id="folder-tree" class="folder-tree">
-              <!-- carpetas -->
+          <div class="profile">
+            <div class="avatar">👤</div>
+            <div class="profile-info">
+              <div class="label">Email de la nube</div>
+              <div class="value" id="user-email"></div>
+              <div class="label">Email de Facturas</div>
+              <div class="value placeholder" id="billing-email">Pendiente</div>
             </div>
           </div>
+
+          <nav class="menu">
+            <button class="menu-item" data-action="open-albaranes">Albaranes</button>
+            <button class="menu-item" data-action="open-facturas">Facturas</button>
+            <button class="menu-item" data-action="upload-albaran">Subir albarán</button>
+            <button class="menu-item" data-action="upload-factura">Subir Factura</button>
+          </nav>
+
+          <button class="btn btn-secondary small" id="logout-btn">Cerrar sesión</button>
         </aside>
 
         <main class="main">
@@ -183,32 +318,20 @@
               <div id="breadcrumbs" class="breadcrumbs"></div>
             </div>
             <div class="actions">
-              <input id="create-folder-name" placeholder="Nombre nueva carpeta" />
-              <button class="btn" id="create-folder-btn">Crear</button>
-              <!-- <input id="share-emails" placeholder="emails, separados por coma" />
-              <button class="btn" id="share-btn">Compartir</button> -->
               <a href="compare.html"><button class="btn">Comparar</button></a>
-              <a href="bd.html"><button class="btn">Ver BD</button></a>
             </div>
           </div>
 
-          <div class="uploader">
-            <div class="file-upload" id="file-upload">
-              <div class="file-icon">📁</div>
-              <p>Haz clic para seleccionar archivos</p>
-              <button class="btn">Seleccionar archivos</button>
-            </div>
-          </div>
-
-          <section class="content">
-            <div id="files-list" class="files-grid"></div>
+          <section class="dashboard">
+            <button class="tile disabled" data-action="centros" disabled>Centros</button>
+            <button class="tile" data-action="bases-datos">Bases de datos</button>
+            <button class="tile" data-action="facturas">Facturas</button>
+            <button class="tile" data-action="albaranes">Albaranes</button>
           </section>
 
-          <div class="section" id="upload-section">...</div>
         </main>
       </div>
     </div>
-  </div>
   
   <script src="user.js"></script>
 </body>

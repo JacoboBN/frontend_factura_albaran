@@ -234,8 +234,8 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
   const sessionId = store.get('sessionId');
 
   try {
-    // Encontrar o crear la carpeta "No procesado/Albaranes"
-    const uploadFolderId = await getOrCreateAlbaranesFolder(sessionId);
+    // Encontrar o crear la carpeta "No procesado/Albaranes" si no hay destino
+    const uploadFolderId = targetFolderId || await getOrCreateAlbaranesFolder(sessionId);
 
     // Support single filePath string or array of paths
     const paths = Array.isArray(filePath) ? filePath : [filePath];
