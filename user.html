@@ -341,6 +341,16 @@
       color: #721c24;
       font-weight: 600;
     }
+
+    .startup-status {
+      background: #fff8e1;
+      border: 1px solid #f0d88c;
+      color: #7a5b00;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -400,6 +410,7 @@
           <section class="content">
             <div id="folder-summary" class="panel"></div>
             <div id="files-list" class="files-grid"></div>
+            <div class="startup-status" id="startup-status">Estado de inicio: esperando...</div>
             <div class="queue-panel" id="upload-queue-panel">
               <h3>Seguimiento de archivos</h3>
               <div class="queue-list" id="upload-queue-list">

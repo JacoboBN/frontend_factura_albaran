@@ -8,15 +8,9 @@ const FormData = require('form-data');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-const WATCH_ROOT = path.join(__dirname, '..', 'No procesado');
 const WATCH_SUBFOLDERS = ['Albaranes', 'Facturas'];
 const WATCHED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.txt'];
 const EMAIL_RECIPIENT = 'bgoptimizing@gmail.com';
-const watcherState = {
-  ready: false,
-  knownFiles: new Set(),
-  inFlight: new Set()
-};
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
@@ -94,6 +88,15 @@ async function performLocalOCR(filePath, mimeType, originalName) {
 
 const store = new Store();
 let mainWindow;
+let windowReadyResolve;
+const windowReadyPromise = new Promise((resolve) => {
+  windowReadyResolve = resolve;
+});
+const startupScanState = {
+  inProgress: false,
+  completed: false,
+  waitingForSession: false
+};
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -107,6 +110,12 @@ function createWindow() {
   });
 
   mainWindow.loadFile('user.html');
+
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (windowReadyResolve) {
+      windowReadyResolve();
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -150,9 +159,8 @@ app.whenReady().then(() => {
       });
   });
 
-  // Start local watcher for new files in "No procesado"
-  startNoProcesadoWatcher().catch(err => {
-    log.error('No procesado watcher error', err);
+  scanNoProcesado('startup').catch(err => {
+    log.error('Startup scan error', err);
   });
 });
 
@@ -450,6 +458,11 @@ ipcMain.handle('get-user-info', async () => {
   }
 });
 
+ipcMain.handle('scan-no-procesado', async () => {
+  await scanNoProcesado('login');
+  return { success: true };
+});
+
 // Generar link para usuarios
 ipcMain.handle('get-user-link', () => {
   // En producción, esta sería la URL de descarga del instalador con parámetro
@@ -569,96 +582,9 @@ ipcMain.handle('send-email', async (event, payload) => {
   }
 });
 
-function normalizePath(filePath) {
-  return path.resolve(filePath).toLowerCase();
-}
-
 function isAllowedExtension(filePath) {
   const ext = path.extname(filePath || '').toLowerCase();
   return WATCHED_EXTENSIONS.includes(ext);
-}
-
-async function buildInitialFileSnapshot() {
-  watcherState.knownFiles.clear();
-  const targets = WATCH_SUBFOLDERS.map(name => path.join(WATCH_ROOT, name));
-  for (const dir of targets) {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const files = fs.readdirSync(dir);
-    files.forEach(fileName => {
-      const fullPath = path.join(dir, fileName);
-      if (fs.statSync(fullPath).isFile()) {
-        watcherState.knownFiles.add(normalizePath(fullPath));
-      }
-    });
-  }
-}
-
-async function waitForFileReady(filePath, attempts = 12, delayMs = 500) {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const stat = fs.statSync(filePath);
-      if (stat.size > 0) {
-        return true;
-      }
-    } catch (e) {
-      // ignore until file exists
-    }
-    await new Promise(resolve => setTimeout(resolve, delayMs));
-  }
-  return false;
-}
-
-async function handleNewNoProcesadoFile(filePath) {
-  const normalized = normalizePath(filePath);
-  if (watcherState.inFlight.has(normalized)) return;
-  watcherState.inFlight.add(normalized);
-
-  try {
-    const sessionId = store.get('sessionId');
-    if (!sessionId) {
-      log.warn('No hay sesión activa; se omite el procesamiento automático.');
-      return;
-    }
-
-    if (!isAllowedExtension(filePath)) {
-      return;
-    }
-
-    const ready = await waitForFileReady(filePath);
-    if (!ready) {
-      throw new Error('Archivo no disponible o incompleto');
-    }
-
-    const mimeType = '';
-    const originalName = path.basename(filePath);
-
-    const analysisResult = await performLocalOCR(filePath, mimeType, originalName)
-      .then(async (ocrResult) => {
-        const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
-          text: ocrResult.text,
-          quality: ocrResult.quality,
-          sessionId: sessionId
-        });
-        return response.data;
-      });
-
-    const subject = `Nuevo documento en No procesado: ${originalName}`;
-    const emailBody = [
-      `Archivo detectado: ${originalName}`,
-      `Ruta local: ${filePath}`,
-      '',
-      'Resultado IA:',
-      analysisResult.analysis || 'Sin salida de IA.'
-    ].join('\n');
-
-    await sendEmailNotification(subject, emailBody);
-  } catch (error) {
-    log.error('Error procesando archivo No procesado', error);
-  } finally {
-    watcherState.inFlight.delete(normalized);
-  }
 }
 
 async function sendEmailNotification(subject, text) {
@@ -675,25 +601,159 @@ async function sendEmailNotification(subject, text) {
   });
 }
 
-async function startNoProcesadoWatcher() {
-  await buildInitialFileSnapshot();
-  watcherState.ready = true;
+function emitToRenderer(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send(channel, payload);
+  } catch (e) {
+    log.warn(`No se pudo enviar evento ${channel}:`, e);
+  }
+}
 
-  WATCH_SUBFOLDERS.forEach((folderName) => {
-    const dir = path.join(WATCH_ROOT, folderName);
+async function waitForWindowReady() {
+  try {
+    await windowReadyPromise;
+  } catch (e) {
+    // ignore
+  }
+}
 
-    fs.watch(dir, { persistent: true }, async (eventType, filename) => {
-      if (!filename) return;
-      const fullPath = path.join(dir, filename);
-      const normalized = normalizePath(fullPath);
+async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
+  const fileName = fileMeta.name || 'Archivo';
 
-      if (!fs.existsSync(fullPath)) return;
-      if (watcherState.knownFiles.has(normalized)) return;
+  emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
+  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
 
-      watcherState.knownFiles.add(normalized);
-      await handleNewNoProcesadoFile(fullPath);
-    });
+  const download = await axios.post(`${BACKEND_URL}/drive/download`, {
+    sessionId: store.get('sessionId'),
+    fileId: fileMeta.id
+  }).then(res => res.data);
+
+  const localPath = download.filePath;
+  const ocrResult = await performLocalOCR(localPath, download.mimeType || '', fileName);
+
+  try {
+    if (localPath && fs.existsSync(localPath)) {
+      fs.unlinkSync(localPath);
+    }
+  } catch (cleanupError) {
+    log.warn('No se pudo limpiar archivo temporal descargado:', cleanupError);
+  }
+
+  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
+  const analysisResult = await axios.post(`${BACKEND_URL}/analyze/document`, {
+    text: ocrResult.text,
+    quality: ocrResult.quality,
+    sessionId: store.get('sessionId')
+  }).then(res => res.data);
+
+  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
+
+  const subject = `Nuevo documento en No procesado: ${fileName}`;
+  const emailBody = [
+    `Archivo detectado: ${fileName}`,
+    `Drive ID: ${fileMeta.id}`,
+    '',
+    'Resultado IA:',
+    analysisResult.analysis || 'Sin salida de IA.'
+  ].join('\n');
+
+  await sendEmailNotification(subject, emailBody);
+
+  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
+}
+
+async function getDriveFolderByName(parentId, name) {
+  const res = await axios.post(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId: store.get('sessionId'),
+    folderId: parentId || null
   });
+
+  const folders = (res.data?.files || []).filter(item => item.mimeType === 'application/vnd.google-apps.folder');
+  return folders.find(folder => (folder.name || '').toLowerCase() === name.toLowerCase()) || null;
+}
+
+async function listDriveFilesInNoProcesado(rootFolderName) {
+  const rootFolder = await getDriveFolderByName(null, rootFolderName);
+  if (!rootFolder) return [];
+
+  const noProcesado = await getDriveFolderByName(rootFolder.id, 'No procesado');
+  if (!noProcesado) return [];
+
+  const contents = await axios.post(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId: store.get('sessionId'),
+    folderId: noProcesado.id
+  });
+
+  const files = (contents.data?.files || [])
+    .filter(item => item.mimeType !== 'application/vnd.google-apps.folder')
+    .filter(item => isAllowedExtension(item.name || ''))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  return files;
+}
+
+async function scanNoProcesado(trigger = 'startup') {
+  if (startupScanState.inProgress) return;
+  if (startupScanState.completed && trigger !== 'manual' && trigger !== 'login') return;
+
+  startupScanState.inProgress = true;
+  await waitForWindowReady();
+
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    emitToRenderer('startup-status', {
+      message: 'No hay sesión activa; no se puede procesar No procesado.'
+    });
+    startupScanState.inProgress = false;
+    startupScanState.waitingForSession = true;
+    return;
+  }
+
+  emitToRenderer('startup-status', { message: 'Revisando carpeta Albaranes (1/2)' });
+  const albaranesFiles = await listDriveFilesInNoProcesado('Albaranes');
+
+  emitToRenderer('startup-status', { message: 'Revisando carpeta Facturas (2/2)' });
+  const facturasFiles = await listDriveFilesInNoProcesado('Facturas');
+
+  const allFiles = [...albaranesFiles, ...facturasFiles];
+  if (allFiles.length === 0) {
+    emitToRenderer('startup-status', { message: 'No se encontraron archivos en No procesado.' });
+    startupScanState.inProgress = false;
+    startupScanState.completed = true;
+    startupScanState.waitingForSession = false;
+    return;
+  }
+
+  emitToRenderer('startup-status', {
+    message: `Encontrados ${allFiles.length} nuevos archivos en No procesado.`
+  });
+
+  let idx = 0;
+  for (const fileMeta of allFiles) {
+    idx += 1;
+    const queueId = `startup-${idx}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const fileName = fileMeta?.name || 'Archivo';
+    emitToRenderer('startup-status', {
+      message: `Analizando ${fileName} (${idx}/${allFiles.length})`
+    });
+
+    try {
+      await processNoProcesadoFileWithEvents(fileMeta, queueId);
+    } catch (error) {
+      emitToRenderer('queue-event', {
+        type: 'error',
+        id: queueId,
+        message: error.message || 'Error desconocido'
+      });
+      log.error('Error procesando archivo en scan inicial:', error);
+    }
+  }
+
+  emitToRenderer('startup-status', { message: 'Análisis inicial completado.' });
+  startupScanState.inProgress = false;
+  startupScanState.completed = true;
+  startupScanState.waitingForSession = false;
 }
 
 // Cerrar sesión

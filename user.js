@@ -11,6 +11,7 @@ const tileButtons = document.querySelectorAll('.tile');
 
 const queueList = document.getElementById('upload-queue-list');
 const uploadQueue = new Map();
+const startupStatusEl = document.getElementById('startup-status');
 
 const QUEUE_STEPS = ['Subiendo', 'OCR', 'IA', 'Enviando', 'Enviado'];
 
@@ -40,6 +41,7 @@ async function checkSession() {
 
   if (info && info.email) {
     showUploadSection(info);
+    await ipcRenderer.invoke('scan-no-procesado');
   } else {
     loginSection.classList.add('active');
     uploadSection.classList.remove('active');
@@ -649,6 +651,29 @@ function showStatus(message, type) {
   }
 }
 
+ipcRenderer.on('startup-status', (event, payload) => {
+  if (!startupStatusEl) return;
+  startupStatusEl.textContent = payload?.message || 'Estado de inicio: esperando...';
+});
+
+ipcRenderer.on('queue-event', (event, payload) => {
+  if (!payload || !payload.id) return;
+
+  if (payload.type === 'init') {
+    initQueueItem(payload.id, payload.fileName || 'Archivo');
+    return;
+  }
+
+  if (payload.type === 'step') {
+    updateQueueStep(payload.id, payload.step);
+    return;
+  }
+
+  if (payload.type === 'error') {
+    markQueueError(payload.id, payload.message || 'Error');
+  }
+});
+
 function initQueueItem(id, fileName) {
   uploadQueue.set(id, { fileName, status: 'Pendiente', error: null });
   renderQueue();
@@ -722,5 +747,6 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
