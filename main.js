@@ -19,6 +19,74 @@ autoUpdater.autoDownload = true;
 
 // URL del backend en Render (siempre usa esta URL ya que el backend está en producción)
 const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
+const DEFAULT_TIMEOUT_MS = 20000;
+const OCR_RETRY_ATTEMPTS = 2;
+const OCR_RETRY_DELAY_MS = 2000;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isRetryableError(error) {
+  const code = error?.code || '';
+  const status = error?.response?.status;
+  return (
+    code === 'ECONNRESET' ||
+    code === 'ECONNABORTED' ||
+    code === 'ETIMEDOUT' ||
+    (status && status >= 500)
+  );
+}
+
+async function postWithRetry(url, data, options = {}) {
+  const retries = options.retries ?? 3;
+  const delayMs = options.delayMs ?? 3000;
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
+  const axiosOptions = options.axiosOptions || {};
+
+  let attempt = 0;
+  while (attempt <= retries) {
+    try {
+      return await axios.post(url, data, { timeout, ...axiosOptions });
+    } catch (error) {
+      if (attempt >= retries || !isRetryableError(error)) {
+        throw error;
+      }
+      await sleep(delayMs);
+      attempt += 1;
+    }
+  }
+}
+
+async function waitForFileReady(filePath, attempts = 8, delayMs = 500) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > 0) {
+        return true;
+      }
+    } catch (e) {
+      // ignore until file exists
+    }
+    await sleep(delayMs);
+  }
+  return false;
+}
+
+async function performLocalOCRWithRetry(filePath, mimeType, originalName) {
+  let attempt = 0;
+  while (attempt <= OCR_RETRY_ATTEMPTS) {
+    try {
+      return await performLocalOCR(filePath, mimeType, originalName);
+    } catch (error) {
+      if (attempt >= OCR_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      await sleep(OCR_RETRY_DELAY_MS);
+      attempt += 1;
+    }
+  }
+}
 
 // Helper function to get binary paths
 function getBinaryPaths() {
@@ -69,7 +137,8 @@ async function performLocalOCR(filePath, mimeType, originalName) {
 
     ocrProcess.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`OCR failed: ${stderr}`));
+        const message = stderr || 'OCR failed with no stderr output';
+        reject(new Error(`OCR failed: ${message}`));
       } else {
         try {
           const result = JSON.parse(stdout);
@@ -223,7 +292,7 @@ ipcMain.handle('create-shared-folder', async () => {
   const sessionId = store.get('sessionId');
   
   try {
-    const response = await axios.post(`${BACKEND_URL}/drive/create-folder`, {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
       sessionId
     });
     
@@ -239,7 +308,7 @@ ipcMain.handle('share-folder', async (event, emails, folderId = null) => {
   const sessionId = store.get('sessionId');
   
   try {
-    const response = await axios.post(`${BACKEND_URL}/drive/share-folder`, {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/share-folder`, {
       sessionId,
       emails,
       folderId
@@ -307,7 +376,7 @@ ipcMain.handle('select-file', async () => {
 ipcMain.handle('list-folders', async () => {
   const sessionId = store.get('sessionId');
   try {
-    const response = await axios.post(`${BACKEND_URL}/drive/list-folders`, { sessionId });
+    const response = await postWithRetry(`${BACKEND_URL}/drive/list-folders`, { sessionId });
     return response.data.folders || [];
   } catch (error) {
     console.error('Error listando carpetas:', error);
@@ -319,7 +388,7 @@ ipcMain.handle('list-folders', async () => {
 ipcMain.handle('list-contents', async (event, folderId = null) => {
   const sessionId = store.get('sessionId');
   try {
-    const response = await axios.post(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId });
+    const response = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId });
     return response.data;
   } catch (error) {
     console.error('Error listando contenido:', error);
@@ -342,7 +411,7 @@ ipcMain.handle('open-external', async (event, url) => {
 ipcMain.handle('create-folder', async (event, name, parentId = null) => {
   const sessionId = store.get('sessionId');
   try {
-    const response = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name, parentId });
+    const response = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, { sessionId, name, parentId });
     return response.data;
   } catch (error) {
     console.error('Error creando carpeta:', error);
@@ -354,7 +423,7 @@ ipcMain.handle('create-folder', async (event, name, parentId = null) => {
 ipcMain.handle('choose-folder', async (event, fileName) => {
   const sessionId = store.get('sessionId');
   try {
-    const resp = await axios.post(`${BACKEND_URL}/drive/list-folders`, { sessionId });
+    const resp = await postWithRetry(`${BACKEND_URL}/drive/list-folders`, { sessionId });
     const folders = resp.data.folders || [];
 
     const buttons = folders.map(f => f.name).slice(0, 20); // limit buttons for UI
@@ -377,7 +446,7 @@ ipcMain.handle('choose-folder', async (event, fileName) => {
       // Crear nueva carpeta: pedir nombre en una ventana modal (no crear en disco)
       const newName = await promptForFolderName(`DriveShare - ${new Date().toLocaleString()}`);
       if (!newName) return null;
-      const created = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: newName });
+      const created = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: newName });
       return created.data.folderId;
     }
 
@@ -448,7 +517,7 @@ ipcMain.handle('get-user-info', async () => {
   }
   
   try {
-    const response = await axios.post(`${BACKEND_URL}/session/info`, {
+    const response = await postWithRetry(`${BACKEND_URL}/session/info`, {
       sessionId
     });
     
@@ -474,26 +543,26 @@ ipcMain.handle('get-user-link', () => {
 async function getOrCreateAlbaranesNoProcesadoFolder(sessionId) {
   try {
     // Listar carpetas en la raíz
-    const rootFoldersResp = await axios.post(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId: 'root' });
+    const rootFoldersResp = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId: 'root' });
     const rootFolders = rootFoldersResp.data.files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
 
     let albaranesFolder = rootFolders.find(f => f.name === 'Albaranes');
 
     if (!albaranesFolder) {
       // Crear "Albaranes"
-      const createResp = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: 'Albaranes' });
+    const createResp = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: 'Albaranes' });
       albaranesFolder = { id: createResp.data.folderId };
     }
 
     // Listar contenido de "Albaranes"
-    const albaranesContentsResp = await axios.post(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId: albaranesFolder.id });
+    const albaranesContentsResp = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, { sessionId, folderId: albaranesFolder.id });
     const albaranesContents = albaranesContentsResp.data.files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
 
     let noProcesadoFolder = albaranesContents.find(f => f.name === 'No procesado');
 
     if (!noProcesadoFolder) {
       // Crear "No procesado" dentro de "Albaranes"
-      const createResp = await axios.post(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: 'No procesado', parentId: albaranesFolder.id });
+      const createResp = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, { sessionId, name: 'No procesado', parentId: albaranesFolder.id });
       noProcesadoFolder = { id: createResp.data.folderId };
     }
 
@@ -513,7 +582,7 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
     const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
 
     // Send extracted text to backend for AI analysis
-    const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
+    const response = await postWithRetry(`${BACKEND_URL}/analyze/document`, {
       text: ocrResult.text,
       quality: ocrResult.quality,
       sessionId: sessionId
@@ -542,7 +611,7 @@ ipcMain.handle('analyze-text', async (event, text, quality = 0.5) => {
   }
 
   try {
-    const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
+    const response = await postWithRetry(`${BACKEND_URL}/analyze/document`, {
       text,
       quality,
       sessionId
@@ -566,7 +635,7 @@ ipcMain.handle('send-email', async (event, payload) => {
   }
 
   try {
-    const response = await axios.post(`${BACKEND_URL}/email/send`, {
+    const response = await postWithRetry(`${BACKEND_URL}/email/send`, {
       sessionId,
       to,
       subject,
@@ -593,7 +662,7 @@ async function sendEmailNotification(subject, text) {
     throw new Error('Sesión no disponible para enviar email');
   }
 
-  await axios.post(`${BACKEND_URL}/email/send`, {
+  await postWithRetry(`${BACKEND_URL}/email/send`, {
     sessionId,
     to: EMAIL_RECIPIENT,
     subject,
@@ -624,13 +693,19 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
 
-  const download = await axios.post(`${BACKEND_URL}/drive/download`, {
-    sessionId: store.get('sessionId'),
-    fileId: fileMeta.id
-  }).then(res => res.data);
+  const downloadResponse = await postWithRetry(
+    `${BACKEND_URL}/drive/download`,
+    { sessionId: store.get('sessionId'), fileId: fileMeta.id },
+    { timeout: 60000, axiosOptions: { responseType: 'stream' } }
+  );
 
-  const localPath = download.filePath;
-  const ocrResult = await performLocalOCR(localPath, download.mimeType || '', fileName);
+  const localPath = await saveDownloadedFileToTemp(downloadResponse, fileName);
+  const ready = await waitForFileReady(localPath);
+  if (!ready) {
+    throw new Error('Archivo descargado no disponible para OCR');
+  }
+  const mimeType = decodeURIComponent(downloadResponse.headers['content-type'] || '');
+  const ocrResult = await performLocalOCRWithRetry(localPath, mimeType, fileName);
 
   try {
     if (localPath && fs.existsSync(localPath)) {
@@ -641,7 +716,7 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   }
 
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-  const analysisResult = await axios.post(`${BACKEND_URL}/analyze/document`, {
+  const analysisResult = await postWithRetry(`${BACKEND_URL}/analyze/document`, {
     text: ocrResult.text,
     quality: ocrResult.quality,
     sessionId: store.get('sessionId')
@@ -663,8 +738,33 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
 }
 
+async function saveDownloadedFileToTemp(downloadResponse, fallbackName) {
+  const tempDir = path.join(app.getPath('temp'), 'drive-downloads');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const headerName = downloadResponse.headers['x-file-name'];
+  const safeName = decodeURIComponent(headerName || fallbackName || 'documento').replace(/[\\/]/g, '_');
+  const localPath = path.join(tempDir, `${Date.now()}-${safeName}`);
+
+  if (downloadResponse.data && typeof downloadResponse.data.pipe === 'function') {
+    await new Promise((resolve, reject) => {
+      const writer = fs.createWriteStream(localPath);
+      downloadResponse.data.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+    return localPath;
+  }
+
+  if (Buffer.isBuffer(downloadResponse.data)) {
+    fs.writeFileSync(localPath, downloadResponse.data);
+    return localPath;
+  }
+
+  throw new Error('Descarga inválida desde Drive');
+}
+
 async function getDriveFolderByName(parentId, name) {
-  const res = await axios.post(`${BACKEND_URL}/drive/list-contents`, {
+  const res = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
     sessionId: store.get('sessionId'),
     folderId: parentId || null
   });
@@ -680,7 +780,7 @@ async function listDriveFilesInNoProcesado(rootFolderName) {
   const noProcesado = await getDriveFolderByName(rootFolder.id, 'No procesado');
   if (!noProcesado) return [];
 
-  const contents = await axios.post(`${BACKEND_URL}/drive/list-contents`, {
+  const contents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
     sessionId: store.get('sessionId'),
     folderId: noProcesado.id
   });
@@ -761,7 +861,7 @@ ipcMain.handle('logout', async () => {
   const sessionId = store.get('sessionId');
 
   try {
-    await axios.post(`${BACKEND_URL}/auth/logout`, {
+    await postWithRetry(`${BACKEND_URL}/auth/logout`, {
       sessionId
     });
   } catch (error) {
