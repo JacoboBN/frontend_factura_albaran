@@ -43,24 +43,27 @@ async function checkSession() {
 
 // Nota: el login se gestiona en user.html. Esta página solo muestra la UI principal.
 
-// Subir archivo a carpeta específica (albaranes o facturas)
-async function uploadFilesToFolder(targetFolderName) {
+// Subir archivo a carpeta específica (albaranes o facturas) dentro de "No procesado"
+async function uploadFilesToFolder(parentFolderName) {
   try {
     const filePaths = await ipcRenderer.invoke('select-file');
 
     if (filePaths && filePaths.length > 0) {
-      const target = await findFolderByName(targetFolderName);
-      if (!target) {
-        showStatus(`No se encontró la carpeta "${targetFolderName}" en Drive`, 'error');
+      const parentFolder = await findFolderByName(parentFolderName, true);
+      if (!parentFolder) {
+        showStatus(`No se encontró la carpeta "${parentFolderName}" en Drive`, 'error');
         return;
       }
+
+      const target = await getOrCreateNoProcesadoFolder(parentFolder.id);
+      const targetLabel = `${parentFolderName}/No procesado`;
 
       for (const p of filePaths) {
         try {
           showStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
           const result = await ipcRenderer.invoke('upload-file', p, target.id);
           if (result && result.success) {
-            showStatus(`¡${pathBasename(p)} subido a ${targetFolderName}!`, 'success');
+            showStatus(`¡${pathBasename(p)} subido a ${targetLabel}!`, 'success');
           } else {
             showStatus(`Error al subir ${pathBasename(p)}`, 'error');
           }
@@ -69,7 +72,7 @@ async function uploadFilesToFolder(targetFolderName) {
         }
       }
 
-      await loadFolderContents(target.id, true, target.name);
+      await loadFolderContents(target.id, true, target.name || 'No procesado');
     }
   } catch (error) {
     showStatus('Error al subir archivo: ' + error.message, 'error');
@@ -239,6 +242,24 @@ async function findFolderByName(targetName, rootOnly = false) {
   }
 }
 
+async function getOrCreateNoProcesadoFolder(parentId) {
+  try {
+    const res = await ipcRenderer.invoke('list-contents', parentId);
+    const folders = (res.files || []).filter(item => item.mimeType === 'application/vnd.google-apps.folder');
+    let noProcesado = folders.find(folder => (folder.name || '').toLowerCase() === 'no procesado');
+
+    if (!noProcesado) {
+      const created = await ipcRenderer.invoke('create-folder', 'No procesado', parentId);
+      noProcesado = { id: created.folderId, name: created.folderName || 'No procesado' };
+    }
+
+    return noProcesado;
+  } catch (error) {
+    console.error('Error obteniendo/creando No procesado:', error);
+    throw new Error('Error al encontrar o crear carpeta No procesado');
+  }
+}
+
 async function navigateToFolderByName(targetName, rootOnly = false) {
   const folder = await findFolderByName(targetName, rootOnly);
   if (!folder) {
@@ -376,7 +397,8 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
       folderSummary.innerHTML = summaryHtml;
     }
 
-    const showFiles = ['facturas', 'albaranes'].includes((currentName || '').toLowerCase());
+    const showFiles = ['facturas', 'albaranes', 'no procesado', 'no comparado']
+      .includes((currentName || '').toLowerCase());
 
     if (filesList) {
       if (!showFiles) {
