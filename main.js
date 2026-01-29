@@ -513,6 +513,62 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
   }
 });
 
+ipcMain.handle('ocr-document', async (event, filePath, mimeType, originalName) => {
+  try {
+    return await performLocalOCR(filePath, mimeType, originalName);
+  } catch (error) {
+    console.error('Error en OCR:', error);
+    throw new Error(error.message || 'Error en OCR');
+  }
+});
+
+ipcMain.handle('analyze-text', async (event, text, quality = 0.5) => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para analizar texto');
+  }
+
+  try {
+    const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
+      text,
+      quality,
+      sessionId
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error analizando texto:', error);
+    throw new Error(error.response?.data?.error || 'Error al analizar texto');
+  }
+});
+
+ipcMain.handle('send-email', async (event, payload) => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para enviar email');
+  }
+
+  const { to, subject, text } = payload || {};
+  if (!to) {
+    throw new Error('Destinatario requerido');
+  }
+
+  try {
+    const response = await axios.post(`${BACKEND_URL}/email/send`, {
+      sessionId,
+      to,
+      subject,
+      text
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error enviando email:', error);
+    const details = error.response?.data?.details;
+    const baseMessage = error.response?.data?.error || 'Error al enviar email';
+    const message = details ? `${baseMessage}: ${JSON.stringify(details)}` : baseMessage;
+    throw new Error(message);
+  }
+});
+
 function normalizePath(filePath) {
   return path.resolve(filePath).toLowerCase();
 }

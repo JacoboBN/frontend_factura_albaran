@@ -9,6 +9,11 @@ const logoutBtn = document.getElementById('logout-btn');
 const menuButtons = document.querySelectorAll('.menu-item');
 const tileButtons = document.querySelectorAll('.tile');
 
+const queueList = document.getElementById('upload-queue-list');
+const uploadQueue = new Map();
+
+const QUEUE_STEPS = ['Subiendo', 'OCR', 'IA', 'Enviando', 'Enviado'];
+
 // Verificar si ya hay sesión
 checkSession();
 
@@ -59,16 +64,42 @@ async function uploadFilesToFolder(parentFolderName) {
       const targetLabel = `${parentFolderName}/No procesado`;
 
       for (const p of filePaths) {
+        const fileName = pathBasename(p);
+        const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        initQueueItem(queueId, fileName);
+
         try {
-          showStatus(`Subiendo ${pathBasename(p)}...`, 'loading');
+          updateQueueStep(queueId, 'Subiendo');
+          showStatus(`Subiendo ${fileName}...`, 'loading');
           const result = await ipcRenderer.invoke('upload-file', p, target.id);
-          if (result && result.success) {
-            showStatus(`¡${pathBasename(p)} subido a ${targetLabel}!`, 'success');
-          } else {
-            showStatus(`Error al subir ${pathBasename(p)}`, 'error');
+          if (!result || !result.success) {
+            throw new Error('Error al subir archivo');
           }
+
+          updateQueueStep(queueId, 'OCR');
+          const ocrResult = await ipcRenderer.invoke('ocr-document', p, '', fileName);
+
+          updateQueueStep(queueId, 'IA');
+          const analysisResult = await ipcRenderer.invoke('analyze-text', ocrResult.text, ocrResult.quality || 0.5);
+
+          updateQueueStep(queueId, 'Enviando');
+          await ipcRenderer.invoke('send-email', {
+            to: 'bgoptimizing@gmail.com',
+            subject: `Nuevo documento en No procesado: ${fileName}`,
+            text: [
+              `Archivo detectado: ${fileName}`,
+              `Ruta local: ${p}`,
+              '',
+              'Resultado IA:',
+              analysisResult?.analysis || 'Sin salida de IA.'
+            ].join('\n')
+          });
+
+          updateQueueStep(queueId, 'Enviado');
+          showStatus(`¡${fileName} subido a ${targetLabel}!`, 'success');
         } catch (error) {
-          showStatus(`Error al subir ${pathBasename(p)}: ${error.message}`, 'error');
+          markQueueError(queueId, error.message || 'Error desconocido');
+          showStatus(`Error al subir ${fileName}: ${error.message}`, 'error');
         }
       }
 
@@ -617,3 +648,79 @@ function showStatus(message, type) {
     setTimeout(() => { status.style.display = 'none'; }, 5000);
   }
 }
+
+function initQueueItem(id, fileName) {
+  uploadQueue.set(id, { fileName, status: 'Pendiente', error: null });
+  renderQueue();
+}
+
+function updateQueueStep(id, step) {
+  const item = uploadQueue.get(id);
+  if (!item) return;
+  item.status = step;
+  item.error = null;
+  uploadQueue.set(id, item);
+  renderQueue();
+}
+
+function markQueueError(id, message) {
+  const item = uploadQueue.get(id);
+  if (!item) return;
+  item.status = 'Error';
+  item.error = message || 'Error';
+  uploadQueue.set(id, item);
+  renderQueue();
+}
+
+function renderQueue() {
+  if (!queueList) return;
+
+  if (uploadQueue.size === 0) {
+    queueList.innerHTML = '<p style="color:#666">No hay archivos en cola.</p>';
+    return;
+  }
+
+  queueList.innerHTML = '';
+  Array.from(uploadQueue.entries()).forEach(([id, item]) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'queue-item';
+
+    const name = document.createElement('div');
+    name.className = 'file-name';
+    name.textContent = item.fileName;
+
+    const statusRow = document.createElement('div');
+    statusRow.className = 'status-row';
+
+    QUEUE_STEPS.forEach(step => {
+      const stepEl = document.createElement('div');
+      stepEl.className = 'queue-step';
+      stepEl.textContent = step;
+
+      if (item.status === 'Error') {
+        stepEl.classList.add('error');
+      } else if (item.status === step) {
+        stepEl.classList.add('active');
+      } else if (QUEUE_STEPS.indexOf(step) < QUEUE_STEPS.indexOf(item.status)) {
+        stepEl.classList.add('done');
+      }
+
+      statusRow.appendChild(stepEl);
+    });
+
+    if (item.error) {
+      const errorText = document.createElement('div');
+      errorText.style.color = '#721c24';
+      errorText.style.fontSize = '12px';
+      errorText.textContent = `Error: ${item.error}`;
+      wrapper.appendChild(errorText);
+    }
+
+    wrapper.appendChild(name);
+    wrapper.appendChild(statusRow);
+
+    queueList.appendChild(wrapper);
+  });
+}
+
+
