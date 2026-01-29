@@ -8,6 +8,16 @@ const FormData = require('form-data');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
+const WATCH_ROOT = path.join(__dirname, '..', 'No procesado');
+const WATCH_SUBFOLDERS = ['Albaranes', 'Facturas'];
+const WATCHED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.txt'];
+const EMAIL_RECIPIENT = 'bgoptimizing@gmail.com';
+const watcherState = {
+  ready: false,
+  knownFiles: new Set(),
+  inFlight: new Set()
+};
+
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
@@ -138,6 +148,11 @@ app.whenReady().then(() => {
       .then((r) => {
         if (r.response === 0) autoUpdater.quitAndInstall();
       });
+  });
+
+  // Start local watcher for new files in "No procesado"
+  startNoProcesadoWatcher().catch(err => {
+    log.error('No procesado watcher error', err);
   });
 });
 
@@ -497,6 +512,133 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
     throw new Error(error.response?.data?.error || 'Error al analizar el documento');
   }
 });
+
+function normalizePath(filePath) {
+  return path.resolve(filePath).toLowerCase();
+}
+
+function isAllowedExtension(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  return WATCHED_EXTENSIONS.includes(ext);
+}
+
+async function buildInitialFileSnapshot() {
+  watcherState.knownFiles.clear();
+  const targets = WATCH_SUBFOLDERS.map(name => path.join(WATCH_ROOT, name));
+  for (const dir of targets) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const files = fs.readdirSync(dir);
+    files.forEach(fileName => {
+      const fullPath = path.join(dir, fileName);
+      if (fs.statSync(fullPath).isFile()) {
+        watcherState.knownFiles.add(normalizePath(fullPath));
+      }
+    });
+  }
+}
+
+async function waitForFileReady(filePath, attempts = 12, delayMs = 500) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > 0) {
+        return true;
+      }
+    } catch (e) {
+      // ignore until file exists
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  return false;
+}
+
+async function handleNewNoProcesadoFile(filePath) {
+  const normalized = normalizePath(filePath);
+  if (watcherState.inFlight.has(normalized)) return;
+  watcherState.inFlight.add(normalized);
+
+  try {
+    const sessionId = store.get('sessionId');
+    if (!sessionId) {
+      log.warn('No hay sesión activa; se omite el procesamiento automático.');
+      return;
+    }
+
+    if (!isAllowedExtension(filePath)) {
+      return;
+    }
+
+    const ready = await waitForFileReady(filePath);
+    if (!ready) {
+      throw new Error('Archivo no disponible o incompleto');
+    }
+
+    const mimeType = '';
+    const originalName = path.basename(filePath);
+
+    const analysisResult = await performLocalOCR(filePath, mimeType, originalName)
+      .then(async (ocrResult) => {
+        const response = await axios.post(`${BACKEND_URL}/analyze/document`, {
+          text: ocrResult.text,
+          quality: ocrResult.quality,
+          sessionId: sessionId
+        });
+        return response.data;
+      });
+
+    const subject = `Nuevo documento en No procesado: ${originalName}`;
+    const emailBody = [
+      `Archivo detectado: ${originalName}`,
+      `Ruta local: ${filePath}`,
+      '',
+      'Resultado IA:',
+      analysisResult.analysis || 'Sin salida de IA.'
+    ].join('\n');
+
+    await sendEmailNotification(subject, emailBody);
+  } catch (error) {
+    log.error('Error procesando archivo No procesado', error);
+  } finally {
+    watcherState.inFlight.delete(normalized);
+  }
+}
+
+async function sendEmailNotification(subject, text) {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión no disponible para enviar email');
+  }
+
+  await axios.post(`${BACKEND_URL}/email/send`, {
+    sessionId,
+    to: EMAIL_RECIPIENT,
+    subject,
+    text
+  });
+}
+
+async function startNoProcesadoWatcher() {
+  await buildInitialFileSnapshot();
+  watcherState.ready = true;
+
+  WATCH_SUBFOLDERS.forEach((folderName) => {
+    const dir = path.join(WATCH_ROOT, folderName);
+
+    fs.watch(dir, { persistent: true }, async (eventType, filename) => {
+      if (!filename) return;
+      const fullPath = path.join(dir, filename);
+      const normalized = normalizePath(fullPath);
+
+      if (!fs.existsSync(fullPath)) return;
+      if (watcherState.knownFiles.has(normalized)) return;
+
+      watcherState.knownFiles.add(normalized);
+      await handleNewNoProcesadoFile(fullPath);
+    });
+  });
+}
 
 // Cerrar sesión
 ipcMain.handle('logout', async () => {
