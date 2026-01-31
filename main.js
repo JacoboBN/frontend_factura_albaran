@@ -651,6 +651,33 @@ ipcMain.handle('send-email', async (event, payload) => {
   }
 });
 
+// Mover archivo en Drive (agregar/quitar padres)
+ipcMain.handle('move-file', async (event, fileId, addParents = [], removeParents = []) => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para mover archivo');
+  }
+  if (!fileId) {
+    throw new Error('fileId requerido para mover archivo');
+  }
+
+  const addList = Array.isArray(addParents) ? addParents : (addParents ? [addParents] : []);
+  const removeList = Array.isArray(removeParents) ? removeParents : (removeParents ? [removeParents] : []);
+
+  try {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/move`, {
+      sessionId,
+      fileId,
+      addParents: addList,
+      removeParents: removeList
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error moviendo archivo:', error);
+    throw new Error(error.response?.data?.error || 'Error al mover archivo');
+  }
+});
+
 function isAllowedExtension(filePath) {
   const ext = path.extname(filePath || '').toLowerCase();
   return WATCHED_EXTENSIONS.includes(ext);
@@ -728,6 +755,21 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
 
   await sendEmailNotification(subject, emailBody);
 
+  try {
+    const rootName = fileMeta.sourceRoot || '';
+    if (rootName) {
+      const noComparado = await getOrCreateNoComparadoFolder(rootName);
+      await postWithRetry(`${BACKEND_URL}/drive/move`, {
+        sessionId: store.get('sessionId'),
+        fileId: fileMeta.id,
+        addParents: [noComparado.id],
+        removeParents: fileMeta.noProcesadoId ? [fileMeta.noProcesadoId] : []
+      });
+    }
+  } catch (moveError) {
+    log.warn('No se pudo mover archivo a No comparado:', moveError);
+  }
+
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
 }
 
@@ -797,6 +839,30 @@ async function getDriveFolderByName(parentId, name) {
   return folders.find(folder => (folder.name || '').toLowerCase() === name.toLowerCase()) || null;
 }
 
+async function getOrCreateChildFolder(parentId, childName) {
+  const existing = await getDriveFolderByName(parentId, childName);
+  if (existing) {
+    return existing;
+  }
+
+  const created = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
+    sessionId: store.get('sessionId'),
+    name: childName,
+    parentId
+  });
+
+  return { id: created.data.folderId, name: created.data.folderName || childName };
+}
+
+async function getOrCreateNoComparadoFolder(rootFolderName) {
+  const rootFolder = await getDriveFolderByName(null, rootFolderName);
+  if (!rootFolder) {
+    throw new Error(`No se encontró la carpeta "${rootFolderName}" en Drive`);
+  }
+
+  return getOrCreateChildFolder(rootFolder.id, 'No comparado');
+}
+
 async function listDriveFilesInNoProcesado(rootFolderName) {
   const rootFolder = await getDriveFolderByName(null, rootFolderName);
   if (!rootFolder) return [];
@@ -812,7 +878,12 @@ async function listDriveFilesInNoProcesado(rootFolderName) {
   const files = (contents.data?.files || [])
     .filter(item => item.mimeType !== 'application/vnd.google-apps.folder')
     .filter(item => isAllowedExtension(item.name || ''))
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(item => ({
+      ...item,
+      sourceRoot: rootFolderName,
+      noProcesadoId: noProcesado.id
+    }));
 
   return files;
 }

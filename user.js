@@ -65,6 +65,13 @@ async function uploadFilesToFolder(parentFolderName) {
       const target = await getOrCreateNoProcesadoFolder(parentFolder.id);
       const targetLabel = `${parentFolderName}/No procesado`;
 
+      let noComparadoFolder = null;
+      try {
+        noComparadoFolder = await getOrCreateChildFolder(parentFolder.id, 'No comparado');
+      } catch (folderError) {
+        console.warn('No se pudo preparar carpeta No comparado:', folderError);
+      }
+
       for (const p of filePaths) {
         const fileName = pathBasename(p);
         const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -97,15 +104,22 @@ async function uploadFilesToFolder(parentFolderName) {
             ].join('\n')
           });
 
+          if (noComparadoFolder?.id) {
+            await ipcRenderer.invoke('move-file', result.file?.id || result?.fileId || result?.id, [noComparadoFolder.id], [target.id]);
+          }
+
           updateQueueStep(queueId, 'Enviado');
-          showStatus(`¡${fileName} subido a ${targetLabel}!`, 'success');
+          const finalLabel = noComparadoFolder?.name
+            ? `${parentFolderName}/No comparado`
+            : targetLabel;
+          showStatus(`¡${fileName} procesado y enviado a ${finalLabel}!`, 'success');
         } catch (error) {
           markQueueError(queueId, error.message || 'Error desconocido');
           showStatus(`Error al subir ${fileName}: ${error.message}`, 'error');
         }
       }
 
-      await loadFolderContents(target.id, true, target.name || 'No procesado');
+      await loadFolderContents(noComparadoFolder?.id || target.id, true, noComparadoFolder?.name || target.name || 'No procesado');
     }
   } catch (error) {
     showStatus('Error al subir archivo: ' + error.message, 'error');
@@ -291,6 +305,19 @@ async function getOrCreateNoProcesadoFolder(parentId) {
     console.error('Error obteniendo/creando No procesado:', error);
     throw new Error('Error al encontrar o crear carpeta No procesado');
   }
+}
+
+async function getOrCreateChildFolder(parentId, childName) {
+  const res = await ipcRenderer.invoke('list-contents', parentId);
+  const folders = (res.files || []).filter(item => item.mimeType === 'application/vnd.google-apps.folder');
+  let target = folders.find(folder => (folder.name || '').toLowerCase() === childName.toLowerCase());
+
+  if (!target) {
+    const created = await ipcRenderer.invoke('create-folder', childName, parentId);
+    target = { id: created.folderId, name: created.folderName || childName };
+  }
+
+  return target;
 }
 
 async function navigateToFolderByName(targetName, rootOnly = false) {
@@ -747,6 +774,8 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
+
 
 
 
