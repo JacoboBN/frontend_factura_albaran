@@ -693,18 +693,11 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
 
-  const downloadResponse = await postWithRetry(
-    `${BACKEND_URL}/drive/download`,
-    { sessionId: store.get('sessionId'), fileId: fileMeta.id },
-    { timeout: 60000, axiosOptions: { responseType: 'stream' } }
-  );
-
-  const localPath = await saveDownloadedFileToTemp(downloadResponse, fileName);
+  const { localPath, mimeType } = await downloadDriveFileToTemp(fileMeta, fileName);
   const ready = await waitForFileReady(localPath);
   if (!ready) {
     throw new Error('Archivo descargado no disponible para OCR');
   }
-  const mimeType = decodeURIComponent(downloadResponse.headers['content-type'] || '');
   const ocrResult = await performLocalOCRWithRetry(localPath, mimeType, fileName);
 
   try {
@@ -736,6 +729,37 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   await sendEmailNotification(subject, emailBody);
 
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
+}
+
+async function downloadDriveFileToTemp(fileMeta, fallbackName) {
+  const sessionId = store.get('sessionId');
+  const attempts = 2;
+  let lastError;
+
+  for (let attempt = 0; attempt <= attempts; attempt += 1) {
+    try {
+      const downloadResponse = await postWithRetry(
+        `${BACKEND_URL}/drive/download`,
+        { sessionId, fileId: fileMeta.id },
+        { timeout: 60000, axiosOptions: { responseType: 'stream' } }
+      );
+
+      const mimeType = decodeURIComponent(downloadResponse.headers['content-type'] || '');
+      const localPath = await saveDownloadedFileToTemp(downloadResponse, fallbackName);
+      const stats = fs.existsSync(localPath) ? fs.statSync(localPath) : null;
+      if (!stats || stats.size === 0) {
+        throw new Error('Descarga completada pero el archivo está vacío');
+      }
+
+      return { localPath, mimeType };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) break;
+      await sleep(2000);
+    }
+  }
+
+  throw lastError || new Error('No se pudo descargar archivo de Drive');
 }
 
 async function saveDownloadedFileToTemp(downloadResponse, fallbackName) {
@@ -808,6 +832,20 @@ async function scanNoProcesado(trigger = 'startup') {
     startupScanState.inProgress = false;
     startupScanState.waitingForSession = true;
     return;
+  }
+
+  try {
+    await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId }, { retries: 1 });
+  } catch (error) {
+    if (error?.response?.status === 401) {
+      store.delete('sessionId');
+      emitToRenderer('startup-status', {
+        message: 'Sesión caducada. Inicia sesión de nuevo para procesar No procesado.'
+      });
+      startupScanState.inProgress = false;
+      startupScanState.waitingForSession = true;
+      return;
+    }
   }
 
   emitToRenderer('startup-status', { message: 'Revisando carpeta Albaranes (1/2)' });
