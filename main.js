@@ -23,6 +23,23 @@ const DEFAULT_TIMEOUT_MS = 20000;
 const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
 
+const ANALYZE_ENDPOINTS = {
+  albaran: '/analyze/document/albaran',
+  factura: '/analyze/document/factura'
+};
+
+function normalizeDocumentType(value) {
+  const normalized = (value || '').toString().toLowerCase();
+  if (normalized.includes('factura')) return 'factura';
+  return 'albaran';
+}
+
+function getAnalyzeEndpoint(docType) {
+  const key = normalizeDocumentType(docType);
+  const endpoint = ANALYZE_ENDPOINTS[key] || ANALYZE_ENDPOINTS.albaran;
+  return `${BACKEND_URL}${endpoint}`;
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -574,7 +591,7 @@ async function getOrCreateAlbaranesNoProcesadoFolder(sessionId) {
 }
 
 // Analyze document with local OCR and AI analysis
-ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalName) => {
+ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalName, docType = 'albaran') => {
   const sessionId = store.get('sessionId');
 
   try {
@@ -582,7 +599,7 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
     const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
 
     // Send extracted text to backend for AI analysis
-    const response = await postWithRetry(`${BACKEND_URL}/analyze/document/albaran`, {
+    const response = await postWithRetry(getAnalyzeEndpoint(docType), {
       text: ocrResult.text,
       quality: ocrResult.quality,
       sessionId: sessionId
@@ -604,14 +621,14 @@ ipcMain.handle('ocr-document', async (event, filePath, mimeType, originalName) =
   }
 });
 
-ipcMain.handle('analyze-text', async (event, text, quality = 0.5) => {
+ipcMain.handle('analyze-text', async (event, text, quality = 0.5, docType = 'albaran') => {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
     throw new Error('Sesión requerida para analizar texto');
   }
 
   try {
-    const response = await postWithRetry(`${BACKEND_URL}/analyze/document/albaran`, {
+    const response = await postWithRetry(getAnalyzeEndpoint(docType), {
       text,
       quality,
       sessionId
@@ -736,7 +753,8 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   }
 
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-  const analysisResult = await postWithRetry(`${BACKEND_URL}/analyze/document/albaran`, {
+  const docType = normalizeDocumentType(fileMeta?.sourceRoot);
+  const analysisResult = await postWithRetry(getAnalyzeEndpoint(docType), {
     text: ocrResult.text,
     quality: ocrResult.quality,
     sessionId: store.get('sessionId')

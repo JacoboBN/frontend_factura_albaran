@@ -56,6 +56,7 @@ async function uploadFilesToFolder(parentFolderName) {
     const filePaths = await ipcRenderer.invoke('select-file');
 
     if (filePaths && filePaths.length > 0) {
+      const docType = (parentFolderName || '').toLowerCase().includes('factura') ? 'factura' : 'albaran';
       const parentFolder = await findFolderByName(parentFolderName, true);
       if (!parentFolder) {
         showStatus(`No se encontró la carpeta "${parentFolderName}" en Drive`, 'error');
@@ -89,7 +90,7 @@ async function uploadFilesToFolder(parentFolderName) {
           const ocrResult = await ipcRenderer.invoke('ocr-document', p, '', fileName);
 
           updateQueueStep(queueId, 'IA');
-          const analysisResult = await ipcRenderer.invoke('analyze-text', ocrResult.text, ocrResult.quality || 0.5);
+          const analysisResult = await ipcRenderer.invoke('analyze-text', ocrResult.text, ocrResult.quality || 0.5, docType);
 
           updateQueueStep(queueId, 'Enviando');
           await ipcRenderer.invoke('send-email', {
@@ -774,6 +775,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 
