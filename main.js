@@ -34,6 +34,92 @@ function normalizeDocumentType(value) {
   return 'albaran';
 }
 
+function sanitizeFileName(name) {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim();
+}
+
+function extractAnalysisSections(analysisText) {
+  if (!analysisText) return null;
+  const text = analysisText.toString();
+  const markerArticulosFactura = '=== ARTÍCULOS POR ALBARÁN (JSON Lines) ===';
+  const markerArticulosAlbaran = '=== ARTÍCULOS (JSON Lines) ===';
+  const markerResumenFactura = '=== RESUMEN FACTURA (JSON) ===';
+  const markerResumenAlbaran = '=== RESUMEN ALBARÁN (JSON) ===';
+
+  const isFactura = text.includes(markerResumenFactura) || text.includes(markerArticulosFactura);
+  const articulosMarker = isFactura ? markerArticulosFactura : markerArticulosAlbaran;
+  const resumenMarker = isFactura ? markerResumenFactura : markerResumenAlbaran;
+
+  if (!text.includes(articulosMarker) || !text.includes(resumenMarker)) {
+    return null;
+  }
+
+  const articulosSplit = text.split(articulosMarker);
+  if (articulosSplit.length < 2) return null;
+  const afterArticulos = articulosSplit[1];
+  const resumenSplit = afterArticulos.split(resumenMarker);
+  if (resumenSplit.length < 2) return null;
+
+  return {
+    articulosRaw: resumenSplit[0].trim(),
+    resumenRaw: resumenSplit[1].trim(),
+    isFactura
+  };
+}
+
+function buildTxtFilesFromAnalysis(analysisText) {
+  const sections = extractAnalysisSections(analysisText);
+  if (!sections) return null;
+
+  const { articulosRaw, resumenRaw, isFactura } = sections;
+  const resumenLine = resumenRaw.split(/\r?\n/).find(line => line.trim());
+  let resumenObj = null;
+  let firstArticuloObj = null;
+
+  if (resumenLine) {
+    try {
+      resumenObj = JSON.parse(resumenLine);
+    } catch (e) {
+      resumenObj = null;
+    }
+  }
+
+  const firstArticuloLine = articulosRaw.split(/\r?\n/).find(line => line.trim());
+  if (firstArticuloLine) {
+    try {
+      firstArticuloObj = JSON.parse(firstArticuloLine);
+    } catch (e) {
+      firstArticuloObj = null;
+    }
+  }
+
+  const docNum = isFactura
+    ? (resumenObj?.num_factura || firstArticuloObj?.num_factura)
+    : (resumenObj?.num_albaran || firstArticuloObj?.num_albaran);
+
+  const safeNum = sanitizeFileName(docNum || 'SinNumero');
+  const suffix = isFactura ? 'Fact' : 'Alb';
+  const files = [];
+
+  if (articulosRaw) {
+    files.push({
+      name: `${safeNum}${suffix}.txt`,
+      content: articulosRaw
+    });
+  }
+
+  if (resumenLine) {
+    files.push({
+      name: `Total${safeNum}${suffix}.txt`,
+      content: resumenLine
+    });
+  }
+
+  return { files, isFactura };
+}
+
 function getAnalyzeEndpoint(docType) {
   const key = normalizeDocumentType(docType);
   const endpoint = ANALYZE_ENDPOINTS[key] || ANALYZE_ENDPOINTS.albaran;
@@ -71,6 +157,48 @@ async function postWithRetry(url, data, options = {}) {
       }
       await sleep(delayMs);
       attempt += 1;
+    }
+  }
+}
+
+async function uploadLocalFileToDrive(sessionId, filePath, targetFolderId) {
+  const formData = new FormData();
+  formData.append('sessionId', sessionId);
+  if (targetFolderId) {
+    formData.append('targetFolderId', targetFolderId);
+  }
+  formData.append('file', fs.createReadStream(filePath));
+
+  const response = await axios.post(`${BACKEND_URL}/drive/upload`, formData, {
+    headers: {
+      ...formData.getHeaders()
+    },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity
+  });
+
+  return response.data;
+}
+
+async function uploadGeneratedTxtFiles(targetFolderId, analysisText) {
+  const sessionId = store.get('sessionId');
+  if (!sessionId || !targetFolderId) return;
+
+  const payload = buildTxtFilesFromAnalysis(analysisText);
+  if (!payload || !payload.files.length) return;
+
+  const tempDir = path.join(app.getPath('temp'), 'ia-json');
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  for (const file of payload.files) {
+    const safeName = sanitizeFileName(file.name);
+    const tempPath = path.join(tempDir, safeName);
+    fs.writeFileSync(tempPath, file.content || '', 'utf8');
+
+    try {
+      await uploadLocalFileToDrive(sessionId, tempPath, targetFolderId);
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch (e) {}
     }
   }
 }
@@ -777,6 +905,7 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
     const rootName = fileMeta.sourceRoot || '';
     if (rootName) {
       const noComparado = await getOrCreateNoComparadoFolder(rootName);
+      await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '');
       await postWithRetry(`${BACKEND_URL}/drive/move`, {
         sessionId: store.get('sessionId'),
         fileId: fileMeta.id,

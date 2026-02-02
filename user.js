@@ -1,4 +1,6 @@
 const { ipcRenderer } = require('electron');
+const fs = require('fs');
+const path = require('path');
 
 // Elementos del DOM
 const loginSection = document.getElementById('login-section');
@@ -14,6 +16,113 @@ const uploadQueue = new Map();
 const startupStatusEl = document.getElementById('startup-status');
 
 const QUEUE_STEPS = ['Subiendo', 'OCR', 'IA', 'Enviando', 'Enviado'];
+
+function sanitizeFileName(name) {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim();
+}
+
+function extractAnalysisSections(analysisText) {
+  if (!analysisText) return null;
+  const text = analysisText.toString();
+  const markerArticulosFactura = '=== ARTÍCULOS POR ALBARÁN (JSON Lines) ===';
+  const markerArticulosAlbaran = '=== ARTÍCULOS (JSON Lines) ===';
+  const markerResumenFactura = '=== RESUMEN FACTURA (JSON) ===';
+  const markerResumenAlbaran = '=== RESUMEN ALBARÁN (JSON) ===';
+
+  const isFactura = text.includes(markerResumenFactura) || text.includes(markerArticulosFactura);
+  const articulosMarker = isFactura ? markerArticulosFactura : markerArticulosAlbaran;
+  const resumenMarker = isFactura ? markerResumenFactura : markerResumenAlbaran;
+
+  if (!text.includes(articulosMarker) || !text.includes(resumenMarker)) {
+    return null;
+  }
+
+  const articulosSplit = text.split(articulosMarker);
+  if (articulosSplit.length < 2) return null;
+  const afterArticulos = articulosSplit[1];
+  const resumenSplit = afterArticulos.split(resumenMarker);
+  if (resumenSplit.length < 2) return null;
+
+  return {
+    articulosRaw: resumenSplit[0].trim(),
+    resumenRaw: resumenSplit[1].trim(),
+    isFactura
+  };
+}
+
+function buildTxtFilesFromAnalysis(analysisText) {
+  const sections = extractAnalysisSections(analysisText);
+  if (!sections) return null;
+
+  const { articulosRaw, resumenRaw, isFactura } = sections;
+  const resumenLine = resumenRaw.split(/\r?\n/).find(line => line.trim());
+  let resumenObj = null;
+  let firstArticuloObj = null;
+
+  if (resumenLine) {
+    try {
+      resumenObj = JSON.parse(resumenLine);
+    } catch (e) {
+      resumenObj = null;
+    }
+  }
+
+  const firstArticuloLine = articulosRaw.split(/\r?\n/).find(line => line.trim());
+  if (firstArticuloLine) {
+    try {
+      firstArticuloObj = JSON.parse(firstArticuloLine);
+    } catch (e) {
+      firstArticuloObj = null;
+    }
+  }
+
+  const docNum = isFactura
+    ? (resumenObj?.num_factura || firstArticuloObj?.num_factura)
+    : (resumenObj?.num_albaran || firstArticuloObj?.num_albaran);
+
+  const safeNum = sanitizeFileName(docNum || 'SinNumero');
+  const suffix = isFactura ? 'Fact' : 'Alb';
+  const files = [];
+
+  if (articulosRaw) {
+    files.push({
+      name: `${safeNum}${suffix}.txt`,
+      content: articulosRaw
+    });
+  }
+
+  if (resumenLine) {
+    files.push({
+      name: `Total${safeNum}${suffix}.txt`,
+      content: resumenLine
+    });
+  }
+
+  return { files, isFactura };
+}
+
+async function uploadGeneratedTxtFiles(targetFolderId, analysisText) {
+  if (!targetFolderId) return;
+  const payload = buildTxtFilesFromAnalysis(analysisText);
+  if (!payload || !payload.files.length) return;
+
+  const tempDir = path.join(require('os').tmpdir(), 'ia-json');
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  for (const file of payload.files) {
+    const safeName = sanitizeFileName(file.name);
+    const tempPath = path.join(tempDir, safeName);
+    fs.writeFileSync(tempPath, file.content || '', 'utf8');
+
+    try {
+      await ipcRenderer.invoke('upload-file', tempPath, targetFolderId);
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch (e) {}
+    }
+  }
+}
 
 // Verificar si ya hay sesión
 checkSession();
@@ -106,6 +215,7 @@ async function uploadFilesToFolder(parentFolderName) {
           });
 
           if (noComparadoFolder?.id) {
+            await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisResult?.analysis || '');
             await ipcRenderer.invoke('move-file', result.file?.id || result?.fileId || result?.id, [noComparadoFolder.id], [target.id]);
           }
 
@@ -775,6 +885,10 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
+
+
+
 
 
 
