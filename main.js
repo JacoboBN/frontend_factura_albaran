@@ -582,7 +582,7 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
     const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
 
     // Send extracted text to backend for AI analysis
-    const response = await postWithRetry(`${BACKEND_URL}/analyze/document`, {
+    const response = await postWithRetry(`${BACKEND_URL}/analyze/document/albaran`, {
       text: ocrResult.text,
       quality: ocrResult.quality,
       sessionId: sessionId
@@ -611,7 +611,7 @@ ipcMain.handle('analyze-text', async (event, text, quality = 0.5) => {
   }
 
   try {
-    const response = await postWithRetry(`${BACKEND_URL}/analyze/document`, {
+    const response = await postWithRetry(`${BACKEND_URL}/analyze/document/albaran`, {
       text,
       quality,
       sessionId
@@ -736,7 +736,7 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   }
 
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-  const analysisResult = await postWithRetry(`${BACKEND_URL}/analyze/document`, {
+  const analysisResult = await postWithRetry(`${BACKEND_URL}/analyze/document/albaran`, {
     text: ocrResult.text,
     quality: ocrResult.quality,
     sessionId: store.get('sessionId')
