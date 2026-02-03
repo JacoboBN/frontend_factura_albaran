@@ -181,6 +181,8 @@ async function checkSession() {
 
   if (info && info.email) {
     try {
+      showStatus('Sesión iniciada. Esperando sincronización con Drive...', 'loading');
+      await new Promise(resolve => setTimeout(resolve, 15000));
       showStatus('Comprobando carpetas estándar en Drive...', 'loading');
       await ipcRenderer.invoke('ensure-standard-folders');
       showStatus('Carpetas estándar verificadas en Drive.', 'success');
@@ -982,6 +984,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 
