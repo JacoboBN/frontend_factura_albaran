@@ -69,6 +69,108 @@ function extractAnalysisSections(analysisText) {
   };
 }
 
+function normalizeArticleName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseJsonLines(text) {
+  if (!text) return [];
+  return text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      try {
+        return JSON.parse(line);
+      } catch (e) {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function parseFacturaAnalysis(analysisText) {
+  const sections = extractAnalysisSections(analysisText);
+  if (!sections || !sections.isFactura) return null;
+
+  const articulos = parseJsonLines(sections.articulosRaw);
+  const resumenLine = sections.resumenRaw.split(/\r?\n/).find(line => line.trim());
+  let resumenObj = null;
+  if (resumenLine) {
+    try {
+      resumenObj = JSON.parse(resumenLine);
+    } catch (e) {
+      resumenObj = null;
+    }
+  }
+
+  let albaranNumbers = Array.isArray(resumenObj?.num_albaran) ? resumenObj.num_albaran : [];
+  if (!albaranNumbers.length) {
+    albaranNumbers = [...new Set(articulos.map(item => item.num_albaran).filter(Boolean))];
+  }
+
+  return {
+    articulos,
+    resumen: resumenObj,
+    albaranNumbers
+  };
+}
+
+function aggregateArticles(lines, mode = 'factura') {
+  const map = new Map();
+  lines.forEach(item => {
+    const key = normalizeArticleName(item.articulo);
+    if (!key) return;
+    const quantity = Number(
+      mode === 'factura'
+        ? (item.kg ?? item.unidades ?? item.bulto ?? 0)
+        : (item.kg ?? item.bulto ?? 0)
+    );
+    const importe = Number(item.importe ?? 0);
+    const current = map.get(key) || { quantity: 0, importe: 0 };
+    current.quantity += Number.isFinite(quantity) ? quantity : 0;
+    current.importe += Number.isFinite(importe) ? importe : 0;
+    map.set(key, current);
+  });
+  return map;
+}
+
+function numbersClose(a, b, tolerance) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= tolerance;
+}
+
+function compareArticleMaps(facturaMap, albaranMap) {
+  const issues = [];
+  const qtyTolerance = 0.01;
+  const importeTolerance = 0.5;
+
+  facturaMap.forEach((fact, key) => {
+    const alb = albaranMap.get(key);
+    if (!alb) {
+      issues.push(`Artículo en factura no encontrado en albarán: ${key}`);
+      return;
+    }
+    if (!numbersClose(fact.quantity, alb.quantity, qtyTolerance)) {
+      issues.push(`Cantidad distinta para ${key}: factura=${fact.quantity}, albarán=${alb.quantity}`);
+    }
+    if (!numbersClose(fact.importe, alb.importe, importeTolerance)) {
+      issues.push(`Importe distinto para ${key}: factura=${fact.importe}, albarán=${alb.importe}`);
+    }
+  });
+
+  albaranMap.forEach((alb, key) => {
+    if (!facturaMap.has(key)) {
+      issues.push(`Artículo en albarán no encontrado en factura: ${key}`);
+    }
+  });
+
+  return issues;
+}
+
 function buildTxtFilesFromAnalysis(analysisText) {
   const sections = extractAnalysisSections(analysisText);
   if (!sections) return null;
@@ -1009,6 +1111,117 @@ async function getOrCreateNoComparadoFolder(rootFolderName) {
 
   return getOrCreateChildFolder(rootFolder.id, 'No comparado');
 }
+
+async function findDriveFileInFolder(folderId, nameIncludes) {
+  const contents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId: store.get('sessionId'),
+    folderId
+  });
+
+  const files = (contents.data?.files || [])
+    .filter(item => item.mimeType !== 'application/vnd.google-apps.folder')
+    .filter(item => (item.name || '').toLowerCase().includes((nameIncludes || '').toLowerCase()));
+
+  return files;
+}
+
+async function downloadDriveFileToString(fileMeta) {
+  const { localPath } = await downloadDriveFileToTemp(fileMeta, fileMeta.name);
+  const text = fs.readFileSync(localPath, 'utf8');
+  try {
+    fs.unlinkSync(localPath);
+  } catch (e) {}
+  return text;
+}
+
+async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName }) {
+  const parsed = parseFacturaAnalysis(facturaAnalysisText);
+  if (!parsed || !parsed.albaranNumbers.length) {
+    return { ok: true, message: 'No se detectaron albaranes en la factura.', issues: [] };
+  }
+
+  const albaranesRoot = await getDriveFolderByName(null, 'Albaranes');
+  if (!albaranesRoot) {
+    return { ok: false, message: 'No se encontró la carpeta "Albaranes" en Drive.', issues: [] };
+  }
+
+  const noComparadoFolder = await getDriveFolderByName(albaranesRoot.id, 'No comparado');
+  if (!noComparadoFolder) {
+    return { ok: false, message: 'No se encontró carpeta No comparado en Drive.', issues: [] };
+  }
+
+  const allNoComparadoFiles = await findDriveFileInFolder(noComparadoFolder.id, '');
+  log.info('[Compare] Archivos en Albaranes/No comparado:', allNoComparadoFiles.map(f => f.name).join(', ') || 'sin archivos');
+
+  const facturaArticulos = parsed.articulos || [];
+  const facturaByAlbaran = new Map();
+  facturaArticulos.forEach(item => {
+    const num = item.num_albaran;
+    if (!num) return;
+    const list = facturaByAlbaran.get(num) || [];
+    list.push(item);
+    facturaByAlbaran.set(num, list);
+  });
+
+  const overallIssues = [];
+  const matchedAlbaranes = [];
+
+  for (const albaranNum of parsed.albaranNumbers) {
+    const expectedName = `${albaranNum}Alb.txt`.toLowerCase();
+    const albaranFiles = await findDriveFileInFolder(noComparadoFolder.id, expectedName);
+    log.info(`[Compare] Buscando ${expectedName} -> encontrados:`, albaranFiles.map(f => f.name).join(', ') || 'ninguno');
+    const albaranTxt = albaranFiles.find(file => (file.name || '').toLowerCase() === expectedName)
+      || albaranFiles.find(file => (file.name || '').toLowerCase().endsWith('alb.txt'))
+      || albaranFiles[0];
+
+    if (!albaranTxt) {
+      overallIssues.push(`No se encontró .txt del albarán ${albaranNum} en No comparado.`);
+      continue;
+    }
+
+    const albaranText = await downloadDriveFileToString(albaranTxt);
+    const albaranLines = parseJsonLines(albaranText);
+    const facturaLinesForAlbaran = facturaByAlbaran.get(albaranNum) || [];
+
+    if (!facturaLinesForAlbaran.length) {
+      overallIssues.push(`No hay artículos de la factura para el albarán ${albaranNum}.`);
+      continue;
+    }
+
+    const facturaMap = aggregateArticles(facturaLinesForAlbaran, 'factura');
+    const albaranMap = aggregateArticles(albaranLines, 'albaran');
+    const issues = compareArticleMaps(facturaMap, albaranMap);
+    if (issues.length) {
+      overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
+    }
+    matchedAlbaranes.push(albaranNum);
+  }
+
+  if (!overallIssues.length) {
+    return { ok: true, message: 'No se encontraron incongruencias.', issues: [] };
+  }
+
+  return {
+    ok: false,
+    message: `Incongruencias encontradas en ${overallIssues.length} línea(s).`,
+    issues: overallIssues,
+    matchedAlbaranes
+  };
+}
+
+ipcMain.handle('compare-factura-albaranes', async (event, payload) => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para comparar albaranes');
+  }
+
+  const { facturaAnalysisText, rootFolderName } = payload || {};
+  if (!facturaAnalysisText || !rootFolderName) {
+    throw new Error('Datos insuficientes para comparar albaranes');
+  }
+
+  return compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName });
+});
 
 async function listDriveFilesInNoProcesado(rootFolderName) {
   const rootFolder = await getDriveFolderByName(null, rootFolderName);

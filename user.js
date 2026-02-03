@@ -219,6 +219,31 @@ async function uploadFilesToFolder(parentFolderName) {
             await ipcRenderer.invoke('move-file', result.file?.id || result?.fileId || result?.id, [noComparadoFolder.id], [target.id]);
           }
 
+          if (docType === 'factura') {
+            try {
+              const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
+                facturaAnalysisText: analysisResult?.analysis || '',
+                rootFolderName: parentFolderName
+              });
+
+              if (compareResult && !compareResult.ok) {
+                await ipcRenderer.invoke('send-email', {
+                  to: 'bgoptimizing@gmail.com',
+                  subject: `Incongruencias en factura ${fileName}`,
+                  text: [
+                    `Factura: ${fileName}`,
+                    compareResult.message || 'Se encontraron incongruencias.',
+                    '',
+                    'Detalles:',
+                    ...(compareResult.issues || []).map(issue => `- ${issue}`)
+                  ].join('\n')
+                });
+              }
+            } catch (compareError) {
+              console.warn('Error comparando factura con albaranes:', compareError);
+            }
+          }
+
           updateQueueStep(queueId, 'Enviado');
           const finalLabel = noComparadoFolder?.name
             ? `${parentFolderName}/No comparado`
@@ -885,6 +910,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 
