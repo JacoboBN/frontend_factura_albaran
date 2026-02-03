@@ -52,7 +52,35 @@ function extractAnalysisSections(analysisText) {
   };
 }
 
-function buildTxtFilesFromAnalysis(analysisText) {
+function appendSourceToJsonLines(text, sourceFileName) {
+  if (!text) return text;
+  const lines = text.split(/\r?\n/);
+  const updated = lines.map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    try {
+      const obj = JSON.parse(trimmed);
+      obj.source_file = sourceFileName || null;
+      return JSON.stringify(obj);
+    } catch (e) {
+      return line;
+    }
+  });
+  return updated.join('\n');
+}
+
+function appendSourceToJsonObject(text, sourceFileName) {
+  if (!text) return text;
+  try {
+    const obj = JSON.parse(text.trim());
+    obj.source_file = sourceFileName || null;
+    return JSON.stringify(obj);
+  } catch (e) {
+    return text;
+  }
+}
+
+function buildTxtFilesFromAnalysis(analysisText, sourceFileName = null) {
   const sections = extractAnalysisSections(analysisText);
   if (!sections) return null;
 
@@ -86,26 +114,29 @@ function buildTxtFilesFromAnalysis(analysisText) {
   const suffix = isFactura ? 'Fact' : 'Alb';
   const files = [];
 
-  if (articulosRaw) {
+  const enrichedArticulos = appendSourceToJsonLines(articulosRaw, sourceFileName);
+  const enrichedResumen = resumenLine ? appendSourceToJsonObject(resumenLine, sourceFileName) : resumenLine;
+
+  if (enrichedArticulos) {
     files.push({
       name: `${safeNum}${suffix}.txt`,
-      content: articulosRaw
+      content: enrichedArticulos
     });
   }
 
-  if (resumenLine) {
+  if (enrichedResumen) {
     files.push({
       name: `Total${safeNum}${suffix}.txt`,
-      content: resumenLine
+      content: enrichedResumen
     });
   }
 
   return { files, isFactura };
 }
 
-async function uploadGeneratedTxtFiles(targetFolderId, analysisText) {
+async function uploadGeneratedTxtFiles(targetFolderId, analysisText, sourceFileName = null) {
   if (!targetFolderId) return;
-  const payload = buildTxtFilesFromAnalysis(analysisText);
+  const payload = buildTxtFilesFromAnalysis(analysisText, sourceFileName);
   if (!payload || !payload.files.length) return;
 
   const tempDir = path.join(require('os').tmpdir(), 'ia-json');
@@ -149,6 +180,11 @@ async function checkSession() {
   const info = await ipcRenderer.invoke('get-user-info');
 
   if (info && info.email) {
+    try {
+      await ipcRenderer.invoke('ensure-standard-folders');
+    } catch (folderError) {
+      console.warn('No se pudieron crear carpetas estándar:', folderError);
+    }
     showUploadSection(info);
     await ipcRenderer.invoke('scan-no-procesado');
   } else {
@@ -165,6 +201,11 @@ async function uploadFilesToFolder(parentFolderName) {
     const filePaths = await ipcRenderer.invoke('select-file');
 
     if (filePaths && filePaths.length > 0) {
+      try {
+        await ipcRenderer.invoke('ensure-standard-folders');
+      } catch (folderError) {
+        console.warn('No se pudieron crear carpetas estándar:', folderError);
+      }
       const docType = (parentFolderName || '').toLowerCase().includes('factura') ? 'factura' : 'albaran';
       const parentFolder = await findFolderByName(parentFolderName, true);
       if (!parentFolder) {
@@ -176,8 +217,10 @@ async function uploadFilesToFolder(parentFolderName) {
       const targetLabel = `${parentFolderName}/No procesado`;
 
       let noComparadoFolder = null;
+      let documentosFolder = null;
       try {
         noComparadoFolder = await getOrCreateChildFolder(parentFolder.id, 'No comparado');
+        documentosFolder = await getOrCreateChildFolder(parentFolder.id, 'Documentos');
       } catch (folderError) {
         console.warn('No se pudo preparar carpeta No comparado:', folderError);
       }
@@ -215,7 +258,7 @@ async function uploadFilesToFolder(parentFolderName) {
           });
 
           if (noComparadoFolder?.id) {
-            await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisResult?.analysis || '');
+            await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisResult?.analysis || '', fileName);
             await ipcRenderer.invoke('move-file', result.file?.id || result?.fileId || result?.id, [noComparadoFolder.id], [target.id]);
           }
 
@@ -238,6 +281,29 @@ async function uploadFilesToFolder(parentFolderName) {
                     ...(compareResult.issues || []).map(issue => `- ${issue}`)
                   ].join('\n')
                 });
+              }
+
+              if (documentosFolder?.id) {
+                const shouldMoveFactura = compareResult?.ok
+                  || (compareResult?.matchedAlbaranes && compareResult.matchedAlbaranes.length > 0);
+                if (shouldMoveFactura) {
+                  const targetId = documentosFolder.id;
+                  const removeId = noComparadoFolder?.id || target.id;
+                  const facturaFileId = result.file?.id || result?.fileId || result?.id;
+                  await ipcRenderer.invoke('move-file', facturaFileId, [targetId], removeId ? [removeId] : []);
+
+                  const payload = buildTxtFilesFromAnalysis(analysisResult?.analysis || '', fileName);
+                  if (payload?.files?.length) {
+                    const txtContents = await ipcRenderer.invoke('list-contents', noComparadoFolder?.id || target.id);
+                    const txtFiles = (txtContents?.files || []).filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
+                    for (const file of payload.files) {
+                      const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
+                      if (match) {
+                        await ipcRenderer.invoke('move-file', match.id, [targetId], removeId ? [removeId] : []);
+                      }
+                    }
+                  }
+                }
               }
             } catch (compareError) {
               console.warn('Error comparando factura con albaranes:', compareError);
@@ -910,6 +976,10 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
+
+
+
 
 
 

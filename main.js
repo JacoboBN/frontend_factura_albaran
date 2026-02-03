@@ -92,6 +92,34 @@ function parseJsonLines(text) {
     .filter(Boolean);
 }
 
+function appendSourceToJsonLines(text, sourceFileName) {
+  if (!text) return text;
+  const lines = text.split(/\r?\n/);
+  const updated = lines.map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    try {
+      const obj = JSON.parse(trimmed);
+      obj.source_file = sourceFileName || null;
+      return JSON.stringify(obj);
+    } catch (e) {
+      return line;
+    }
+  });
+  return updated.join('\n');
+}
+
+function appendSourceToJsonObject(text, sourceFileName) {
+  if (!text) return text;
+  try {
+    const obj = JSON.parse(text.trim());
+    obj.source_file = sourceFileName || null;
+    return JSON.stringify(obj);
+  } catch (e) {
+    return text;
+  }
+}
+
 function parseFacturaAnalysis(analysisText) {
   const sections = extractAnalysisSections(analysisText);
   if (!sections || !sections.isFactura) return null;
@@ -171,7 +199,7 @@ function compareArticleMaps(facturaMap, albaranMap) {
   return issues;
 }
 
-function buildTxtFilesFromAnalysis(analysisText) {
+function buildTxtFilesFromAnalysis(analysisText, sourceFileName = null) {
   const sections = extractAnalysisSections(analysisText);
   if (!sections) return null;
 
@@ -205,17 +233,20 @@ function buildTxtFilesFromAnalysis(analysisText) {
   const suffix = isFactura ? 'Fact' : 'Alb';
   const files = [];
 
-  if (articulosRaw) {
+  const enrichedArticulos = appendSourceToJsonLines(articulosRaw, sourceFileName);
+  const enrichedResumen = resumenLine ? appendSourceToJsonObject(resumenLine, sourceFileName) : resumenLine;
+
+  if (enrichedArticulos) {
     files.push({
       name: `${safeNum}${suffix}.txt`,
-      content: articulosRaw
+      content: enrichedArticulos
     });
   }
 
-  if (resumenLine) {
+  if (enrichedResumen) {
     files.push({
       name: `Total${safeNum}${suffix}.txt`,
-      content: resumenLine
+      content: enrichedResumen
     });
   }
 
@@ -282,11 +313,11 @@ async function uploadLocalFileToDrive(sessionId, filePath, targetFolderId) {
   return response.data;
 }
 
-async function uploadGeneratedTxtFiles(targetFolderId, analysisText) {
+async function uploadGeneratedTxtFiles(targetFolderId, analysisText, sourceFileName = null) {
   const sessionId = store.get('sessionId');
   if (!sessionId || !targetFolderId) return;
 
-  const payload = buildTxtFilesFromAnalysis(analysisText);
+  const payload = buildTxtFilesFromAnalysis(analysisText, sourceFileName);
   if (!payload || !payload.files.length) return;
 
   const tempDir = path.join(app.getPath('temp'), 'ia-json');
@@ -779,6 +810,14 @@ ipcMain.handle('scan-no-procesado', async () => {
   return { success: true };
 });
 
+ipcMain.handle('ensure-standard-folders', async () => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para crear carpetas');
+  }
+  return ensureStandardFolders();
+});
+
 // Generar link para usuarios
 ipcMain.handle('get-user-link', () => {
   // En producción, esta sería la URL de descarga del instalador con parámetro
@@ -1007,7 +1046,7 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
     const rootName = fileMeta.sourceRoot || '';
     if (rootName) {
       const noComparado = await getOrCreateNoComparadoFolder(rootName);
-      await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '');
+      await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '', fileName);
       await postWithRetry(`${BACKEND_URL}/drive/move`, {
         sessionId: store.get('sessionId'),
         fileId: fileMeta.id,
@@ -1112,6 +1151,79 @@ async function getOrCreateNoComparadoFolder(rootFolderName) {
   return getOrCreateChildFolder(rootFolder.id, 'No comparado');
 }
 
+async function ensureRootFolderWithChildren(rootName, childNames) {
+  let rootFolder = await getDriveFolderByName(null, rootName);
+  if (!rootFolder) {
+    const created = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
+      sessionId: store.get('sessionId'),
+      name: rootName,
+      parentId: null
+    });
+    rootFolder = { id: created.data.folderId, name: created.data.folderName || rootName };
+  }
+
+  const ensuredChildren = {};
+  for (const childName of childNames) {
+    ensuredChildren[childName] = await getOrCreateChildFolder(rootFolder.id, childName);
+  }
+
+  return { rootFolder, children: ensuredChildren };
+}
+
+async function ensureStandardFolders() {
+  const childNames = ['No procesado', 'No comparado', 'Documentos'];
+  const albaranes = await ensureRootFolderWithChildren('Albaranes', childNames);
+  const facturas = await ensureRootFolderWithChildren('Facturas', childNames);
+  return { albaranes, facturas };
+}
+
+async function getOrCreateDocumentosFolder(rootFolderName) {
+  const rootFolder = await getDriveFolderByName(null, rootFolderName);
+  if (!rootFolder) {
+    throw new Error(`No se encontró la carpeta "${rootFolderName}" en Drive`);
+  }
+
+  return getOrCreateChildFolder(rootFolder.id, 'Documentos');
+}
+
+async function moveDriveFileToFolder(fileMeta, targetFolderId, currentFolderId) {
+  if (!fileMeta?.id || !targetFolderId) return;
+  await postWithRetry(`${BACKEND_URL}/drive/move`, {
+    sessionId: store.get('sessionId'),
+    fileId: fileMeta.id,
+    addParents: [targetFolderId],
+    removeParents: currentFolderId ? [currentFolderId] : []
+  });
+}
+
+async function moveAlbaranAssetsToDocumentos({
+  albaranNum,
+  albaranTxt,
+  albaranLines,
+  noComparadoFolderId,
+  documentosFolderId
+}) {
+  if (!albaranTxt || !documentosFolderId || !noComparadoFolderId) return;
+
+  await moveDriveFileToFolder(albaranTxt, documentosFolderId, noComparadoFolderId);
+
+  const totalName = `Total${albaranNum}Alb.txt`;
+  const totalFiles = await findDriveFileInFolder(noComparadoFolderId, totalName);
+  const totalTxt = totalFiles.find(file => (file.name || '').toLowerCase() === totalName.toLowerCase());
+  if (totalTxt) {
+    await moveDriveFileToFolder(totalTxt, documentosFolderId, noComparadoFolderId);
+  }
+
+  const sourceFileName = albaranLines.find(item => item?.source_file)?.source_file;
+  if (sourceFileName) {
+    const sourceFiles = await findDriveFileInFolder(noComparadoFolderId, sourceFileName);
+    const sourceFile = sourceFiles.find(file => (file.name || '').toLowerCase() === sourceFileName.toLowerCase());
+    if (sourceFile) {
+      await moveDriveFileToFolder(sourceFile, documentosFolderId, noComparadoFolderId);
+    }
+  }
+}
+
 async function findDriveFileInFolder(folderId, nameIncludes) {
   const contents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
     sessionId: store.get('sessionId'),
@@ -1137,7 +1249,7 @@ async function downloadDriveFileToString(fileMeta) {
 async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName }) {
   const parsed = parseFacturaAnalysis(facturaAnalysisText);
   if (!parsed || !parsed.albaranNumbers.length) {
-    return { ok: true, message: 'No se detectaron albaranes en la factura.', issues: [] };
+    return { ok: true, message: 'No se detectaron albaranes en la factura.', issues: [], matchedAlbaranes: [], expectedAlbaranes: [] };
   }
 
   const albaranesRoot = await getDriveFolderByName(null, 'Albaranes');
@@ -1147,11 +1259,10 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
   const noComparadoFolder = await getDriveFolderByName(albaranesRoot.id, 'No comparado');
   if (!noComparadoFolder) {
-    return { ok: false, message: 'No se encontró carpeta No comparado en Drive.', issues: [] };
+    return { ok: false, message: 'No se encontró carpeta No comparado en Drive.', issues: [], matchedAlbaranes: [], expectedAlbaranes: parsed.albaranNumbers };
   }
 
-  const allNoComparadoFiles = await findDriveFileInFolder(noComparadoFolder.id, '');
-  log.info('[Compare] Archivos en Albaranes/No comparado:', allNoComparadoFiles.map(f => f.name).join(', ') || 'sin archivos');
+  const documentosFolder = await getOrCreateDocumentosFolder('Albaranes');
 
   const facturaArticulos = parsed.articulos || [];
   const facturaByAlbaran = new Map();
@@ -1169,7 +1280,6 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   for (const albaranNum of parsed.albaranNumbers) {
     const expectedName = `${albaranNum}Alb.txt`.toLowerCase();
     const albaranFiles = await findDriveFileInFolder(noComparadoFolder.id, expectedName);
-    log.info(`[Compare] Buscando ${expectedName} -> encontrados:`, albaranFiles.map(f => f.name).join(', ') || 'ninguno');
     const albaranTxt = albaranFiles.find(file => (file.name || '').toLowerCase() === expectedName)
       || albaranFiles.find(file => (file.name || '').toLowerCase().endsWith('alb.txt'))
       || albaranFiles[0];
@@ -1194,18 +1304,31 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     if (issues.length) {
       overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
     }
+
+    try {
+      await moveAlbaranAssetsToDocumentos({
+        albaranNum,
+        albaranTxt,
+        albaranLines,
+        noComparadoFolderId: noComparadoFolder.id,
+        documentosFolderId: documentosFolder.id
+      });
+    } catch (moveError) {
+      log.warn(`No se pudo mover albarán ${albaranNum} a Documentos:`, moveError);
+    }
     matchedAlbaranes.push(albaranNum);
   }
 
   if (!overallIssues.length) {
-    return { ok: true, message: 'No se encontraron incongruencias.', issues: [] };
+    return { ok: true, message: 'No se encontraron incongruencias.', issues: [], matchedAlbaranes, expectedAlbaranes: parsed.albaranNumbers };
   }
 
   return {
     ok: false,
     message: `Incongruencias encontradas en ${overallIssues.length} línea(s).`,
     issues: overallIssues,
-    matchedAlbaranes
+    matchedAlbaranes,
+    expectedAlbaranes: parsed.albaranNumbers
   };
 }
 
@@ -1267,6 +1390,7 @@ async function scanNoProcesado(trigger = 'startup') {
 
   try {
     await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId }, { retries: 1 });
+    await ensureStandardFolders();
   } catch (error) {
     if (error?.response?.status === 401) {
       store.delete('sessionId');
