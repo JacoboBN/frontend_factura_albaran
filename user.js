@@ -181,8 +181,11 @@ async function checkSession() {
 
   if (info && info.email) {
     try {
+      showStatus('Comprobando carpetas estándar en Drive...', 'loading');
       await ipcRenderer.invoke('ensure-standard-folders');
+      showStatus('Carpetas estándar verificadas en Drive.', 'success');
     } catch (folderError) {
+      showStatus('Error al verificar carpetas estándar en Drive.', 'error');
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
     showUploadSection(info);
@@ -202,8 +205,11 @@ async function uploadFilesToFolder(parentFolderName) {
 
     if (filePaths && filePaths.length > 0) {
       try {
+        showStatus('Comprobando carpetas estándar en Drive...', 'loading');
         await ipcRenderer.invoke('ensure-standard-folders');
+        showStatus('Carpetas estándar verificadas en Drive.', 'success');
       } catch (folderError) {
+        showStatus('Error al verificar carpetas estándar en Drive.', 'error');
         console.warn('No se pudieron crear carpetas estándar:', folderError);
       }
       const docType = (parentFolderName || '').toLowerCase().includes('factura') ? 'factura' : 'albaran';
@@ -976,6 +982,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 

@@ -1152,29 +1152,36 @@ async function getOrCreateNoComparadoFolder(rootFolderName) {
 }
 
 async function ensureRootFolderWithChildren(rootName, childNames) {
+  const created = [];
   let rootFolder = await getDriveFolderByName(null, rootName);
   if (!rootFolder) {
-    const created = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
+    const createdRoot = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
       sessionId: store.get('sessionId'),
       name: rootName,
       parentId: null
     });
-    rootFolder = { id: created.data.folderId, name: created.data.folderName || rootName };
+    rootFolder = { id: createdRoot.data.folderId, name: createdRoot.data.folderName || rootName };
+    created.push(rootName);
   }
 
   const ensuredChildren = {};
   for (const childName of childNames) {
-    ensuredChildren[childName] = await getOrCreateChildFolder(rootFolder.id, childName);
+    const existing = await getDriveFolderByName(rootFolder.id, childName);
+    if (!existing) {
+      created.push(`${rootName}/${childName}`);
+    }
+    ensuredChildren[childName] = existing || await getOrCreateChildFolder(rootFolder.id, childName);
   }
 
-  return { rootFolder, children: ensuredChildren };
+  return { rootFolder, children: ensuredChildren, created };
 }
 
 async function ensureStandardFolders() {
   const childNames = ['No procesado', 'No comparado', 'Documentos'];
   const albaranes = await ensureRootFolderWithChildren('Albaranes', childNames);
   const facturas = await ensureRootFolderWithChildren('Facturas', childNames);
-  return { albaranes, facturas };
+  const created = [...albaranes.created, ...facturas.created];
+  return { albaranes, facturas, created };
 }
 
 async function getOrCreateDocumentosFolder(rootFolderName) {
