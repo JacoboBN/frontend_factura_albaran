@@ -259,17 +259,6 @@ async function uploadFilesToFolder(parentFolderName) {
           const analysisResult = await ipcRenderer.invoke('analyze-text', ocrResult.text, ocrResult.quality || 0.5, docType);
 
           updateQueueStep(queueId, 'Enviando');
-          await ipcRenderer.invoke('send-email', {
-            to: 'bgoptimizing@gmail.com',
-            subject: `Nuevo documento en No procesado: ${fileName}`,
-            text: [
-              `Archivo detectado: ${fileName}`,
-              `Ruta local: ${p}`,
-              '',
-              'Resultado IA:',
-              analysisResult?.analysis || 'Sin salida de IA.'
-            ].join('\n')
-          });
 
           if (noComparadoFolder?.id) {
             await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisResult?.analysis || '', fileName);
@@ -284,17 +273,7 @@ async function uploadFilesToFolder(parentFolderName) {
               });
 
               if (compareResult && !compareResult.ok) {
-                await ipcRenderer.invoke('send-email', {
-                  to: 'bgoptimizing@gmail.com',
-                  subject: `Incongruencias en factura ${fileName}`,
-                  text: [
-                    `Factura: ${fileName}`,
-                    compareResult.message || 'Se encontraron incongruencias.',
-                    '',
-                    'Detalles:',
-                    ...(compareResult.issues || []).map(issue => `- ${issue}`)
-                  ].join('\n')
-                });
+                console.warn('Incongruencias en factura:', compareResult);
               }
 
               if (documentosFolder?.id) {
@@ -673,8 +652,8 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
       folderSummary.innerHTML = summaryHtml;
     }
 
-    const showFiles = ['facturas', 'albaranes', 'no procesado', 'no comparado']
-      .includes((currentName || '').toLowerCase());
+    const currentNameLower = (currentName || '').toLowerCase();
+    const showFiles = currentNameLower !== 'mi unidad';
 
     if (filesList) {
       if (!showFiles) {
@@ -1004,6 +983,8 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
+
 
 
 

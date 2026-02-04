@@ -54,7 +54,7 @@
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 800px; /* Ensure minimum width for scroll */
+      min-width: 800px;
     }
 
     th, td {
@@ -83,6 +83,27 @@
       text-decoration: none;
       width: fit-content;
     }
+
+    .error-yes {
+      background-color: #ffebee;
+      color: #c62828;
+      font-weight: bold;
+    }
+
+    .error-no {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+
+    .status-si {
+      color: #2e7d32;
+      font-weight: bold;
+    }
+
+    .status-no {
+      color: #c62828;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
@@ -92,6 +113,7 @@
       <a href="user.html" class="btn back-btn" id="back-btn">Volver</a>
     </div>
 
+    <!-- PROVEEDORES -->
     <div class="section">
       <h2>BD Proveedores</h2>
       <div class="table-container">
@@ -100,102 +122,192 @@
             <tr>
               <th>CIF</th>
               <th>Nombre</th>
-              <th>Dirección</th>
-              <th>Tlf</th>
               <th>RSA</th>
+              <th>IBAN</th>
+              <th>Dirección</th>
+              <th>Nº Errores</th>
             </tr>
           </thead>
-          <tbody>
-            <!-- Datos aquí -->
-          </tbody>
+          <tbody></tbody>
         </table>
       </div>
     </div>
 
+    <!-- CENTROS -->
     <div class="section">
-      <h2>BD Albaranes</h2>
+      <h2>BD Centros</h2>
       <div class="table-container">
-        <table id="albaranes-table">
-          <thead>
-            <tr>
-              <th>Nº albarán</th>
-              <th>CIF Proveedor</th>
-              <th>Proveedor</th>
-              <th>Fecha</th>
-              <th>Artículo</th>
-              <th>País</th>
-              <th>Bulto</th>
-              <th>KG</th>
-              <th>Precio por KG</th>
-              <th>Precio por bulto</th>
-              <th>Importe</th>
-              <th>URL Drive</th>
-              <th>¿Procesado?</th>
-            </tr>
-          </thead>
-          <tbody>
-            <!-- Datos aquí -->
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="section">
-      <h2>BD Facturas</h2>
-      <div class="table-container">
-        <table id="facturas-table">
-          <thead>
-            <tr>
-              <th>Nº factura</th>
-              <th>CIF Proveedor</th>
-              <th>Proveedor</th>
-              <th>Fecha</th>
-              <th>Artículo</th>
-              <th>País</th>
-              <th>Bulto</th>
-              <th>KG</th>
-              <th>Precio por KG</th>
-              <th>Precio por bulto</th>
-              <th>Importe</th>
-              <th>URL Drive</th>
-              <th>¿Coincide?</th>
-            </tr>
-          </thead>
-          <tbody>
-            <!-- Datos aquí -->
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="section">
-      <h2>BD Pedidos</h2>
-      <div class="table-container">
-        <table id="pedidos-table">
+        <table id="centros-table">
           <thead>
             <tr>
               <th>ID</th>
-              <th>CIF Proveedor</th>
-              <th>Proveedor</th>
-              <th>Nº Albarán</th>
-              <th>Fecha Albarán</th>
-              <th>Nº Factura</th>
-              <th>Fecha Factura</th>
-              <th>Total</th>
-              <th>% IVA</th>
-              <th>IVA</th>
+              <th>Nombre</th>
+              <th>Dirección</th>
+              <th>Nº errores</th>
             </tr>
           </thead>
-          <tbody>
-            <!-- Datos aquí -->
-          </tbody>
+          <tbody></tbody>
         </table>
       </div>
     </div>
-  </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <!-- ALBARANES ELEMENTOS -->
+    <div class="section">
+      <h2>Albaranes Elementos</h2>
+      <div class="table-container">
+        <table id="albaranes-elementos-table">
+          <thead>
+            <tr>
+              <th>CIF Proveedor</th>
+              <th>Nº albarán</th>
+              <th>Fecha</th>
+              <th>Recibidor</th>
+              <th>Artículo</th>
+              <th>País</th>
+              <th>Bultos</th>
+              <th>Kg</th>
+              <th>Precio</th>
+              <th>Importe total</th>
+              <th>Comprobado</th>
+              <th>Fallo</th>
+              <th>Arreglado</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FACTURAS ELEMENTOS -->
+    <div class="section">
+      <h2>Facturas Elementos</h2>
+      <div class="table-container">
+        <table id="facturas-elementos-table">
+          <thead>
+            <tr>
+              <th>CIF Proveedor</th>
+              <th>Nº factura</th>
+              <th>Fecha</th>
+              <th>Recibidor</th>
+              <th>Artículo</th>
+              <th>País</th>
+              <th>Bultos</th>
+              <th>Kg</th>
+              <th>Precio</th>
+              <th>Importe total</th>
+              <th>Nº albarán</th>
+              <th>Fecha albarán</th>
+              <th>Comprobado</th>
+              <th>Fallo</th>
+              <th>Arreglado</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ALBARÁN TOTAL -->
+    <div class="section">
+      <h2>Albarán Total</h2>
+      <div class="table-container">
+        <table id="albaran-total-table">
+          <thead>
+            <tr>
+              <th>Nº</th>
+              <th>Fecha</th>
+              <th>Total sin IVA</th>
+              <th>% IVA</th>
+              <th>IVA</th>
+              <th>Total</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FACTURA TOTAL -->
+    <div class="section">
+      <h2>Factura Total</h2>
+      <div class="table-container">
+        <table id="factura-total-table">
+          <thead>
+            <tr>
+              <th>Nº</th>
+              <th>Fecha</th>
+              <th>Total sin IVA</th>
+              <th>% IVA</th>
+              <th>IVA</th>
+              <th>Total</th>
+              <th>Multialbarán</th>
+              <th>Nº Albarán</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
   <script>
+    // Datos ficticios para proveedores
+    const proveedoresData = [
+      { cif: 'A12345678', nombre: 'Frutas García S.L.', rsa: 'García Distribución', iban: 'ES79 2100 0813 4012 3456 7891', direccion: 'C/ Comercio 45, Madrid', errores: 0 },
+      { cif: 'B23456789', nombre: 'Verduras del Campo S.A.', rsa: 'Verduras Campo', iban: 'ES91 2100 0418 4502 3456 7892', direccion: 'Pol. Ind. Norte, Murcia', errores: 2 },
+      { cif: 'C34567890', nombre: 'Importaciones Martínez', rsa: 'Martínez Import', iban: 'ES12 2100 0813 4512 3456 7893', direccion: 'Avda. Principal 128, Valencia', errores: 1 },
+      { cif: 'D45678901', nombre: 'Hortalizas Premium S.L.', rsa: 'Premium Hortalizas', iban: 'ES34 2100 0813 4512 3456 7894', direccion: 'C/ Mayor 67, Almería', errores: 0 },
+      { cif: 'E56789012', nombre: 'Distribuciones López', rsa: 'López Distribución', iban: 'ES56 2100 0813 4512 3456 7895', direccion: 'Pol. Ind. Sur, Sevilla', errores: 3 }
+    ];
+
+    // Datos ficticios para centros
+    const centrosData = [
+      { id: 'C001', nombre: 'Centro Logístico Madrid Norte', direccion: 'Pol. Ind. Las Mercedes, Madrid', errores: 1 },
+      { id: 'C002', nombre: 'Centro Distribución Valencia', direccion: 'C/ Industria 89, Valencia', errores: 0 },
+      { id: 'C003', nombre: 'Almacén Murcia', direccion: 'Avda. Europa 234, Murcia', errores: 2 },
+      { id: 'C004', nombre: 'Hub Barcelona', direccion: 'Pol. Ind. Zona Franca, Barcelona', errores: 0 }
+    ];
+
+    // Datos ficticios para albaranes elementos
+    const albaranesElementosData = [
+      { cif: 'A12345678', num_albaran: 'ALB-2024-001', fecha: '15/01/2024', recibidor: 'C001', articulo: 'Tomates', pais: 'España', bultos: 50, kg: 1250, precio: '1.80€/kg', importe: '2.250,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
+      { cif: 'B23456789', num_albaran: 'ALB-2024-002', fecha: '16/01/2024', recibidor: 'C002', articulo: 'Lechugas', pais: 'España', bultos: 30, kg: 450, precio: '2.40€/kg', importe: '1.080,00€', comprobado: 'Sí', fallo: 'Sí', arreglado: 'Sí' },
+      { cif: 'C34567890', num_albaran: 'ALB-2024-003', fecha: '17/01/2024', recibidor: 'C001', articulo: 'Aguacates', pais: 'Perú', bultos: 40, kg: 800, precio: '4.50€/kg', importe: '3.600,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
+      { cif: 'A12345678', num_albaran: 'ALB-2024-004', fecha: '18/01/2024', recibidor: 'C003', articulo: 'Pimientos', pais: 'España', bultos: 25, kg: 625, precio: '2.20€/kg', importe: '1.375,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
+      { cif: 'D45678901', num_albaran: 'ALB-2024-005', fecha: '19/01/2024', recibidor: 'C004', articulo: 'Calabacines', pais: 'España', bultos: 35, kg: 875, precio: '1.60€/kg', importe: '1.400,00€', comprobado: 'No', fallo: 'Sí', arreglado: 'No' },
+      { cif: 'B23456789', num_albaran: 'ALB-2024-006', fecha: '20/01/2024', recibidor: 'C001', articulo: 'Zanahorias', pais: 'España', bultos: 60, kg: 1500, precio: '0.95€/kg', importe: '1.425,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' }
+    ];
+
+    // Datos ficticios para facturas elementos
+    const facturasElementosData = [
+      { cif: 'A12345678', num_factura: 'F-2024-0015', fecha: '22/01/2024', recibidor: 'C001', articulo: 'Tomates', pais: 'España', bultos: 50, kg: 1250, precio: '1.80€/kg', importe: '2.250,00€', num_albaran: 'ALB-2024-001', fecha_albaran: '15/01/2024', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
+      { cif: 'B23456789', num_factura: 'F-2024-0016', fecha: '23/01/2024', recibidor: 'C002', articulo: 'Lechugas', pais: 'España', bultos: 30, kg: 450, precio: '2.40€/kg', importe: '1.080,00€', num_albaran: 'ALB-2024-002', fecha_albaran: '16/01/2024', comprobado: 'Sí', fallo: 'Sí', arreglado: 'Sí' },
+      { cif: 'C34567890', num_factura: 'F-2024-0017', fecha: '24/01/2024', recibidor: 'C001', articulo: 'Aguacates', pais: 'Perú', bultos: 40, kg: 800, precio: '4.50€/kg', importe: '3.600,00€', num_albaran: 'ALB-2024-003', fecha_albaran: '17/01/2024', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
+      { cif: 'A12345678', num_factura: 'F-2024-0018', fecha: '25/01/2024', recibidor: 'C003', articulo: 'Pimientos', pais: 'España', bultos: 25, kg: 625, precio: '2.20€/kg', importe: '1.375,00€', num_albaran: 'ALB-2024-004', fecha_albaran: '18/01/2024', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
+      { cif: 'D45678901', num_factura: 'F-2024-0019', fecha: '26/01/2024', recibidor: 'C004', articulo: 'Calabacines', pais: 'España', bultos: 35, kg: 875, precio: '1.60€/kg', importe: '1.400,00€', num_albaran: 'ALB-2024-005', fecha_albaran: '19/01/2024', comprobado: 'Sí', fallo: 'Sí', arreglado: 'No' }
+    ];
+
+    // Datos ficticios para albarán total
+    const albaranTotalData = [
+      { num: 'ALB-2024-001', fecha: '15/01/2024', total_sin_iva: '2.250,00€', iva_porcentaje: '10%', iva: '225,00€', total: '2.475,00€', error: 'No' },
+      { num: 'ALB-2024-002', fecha: '16/01/2024', total_sin_iva: '1.080,00€', iva_porcentaje: '10%', iva: '108,00€', total: '1.188,00€', error: 'Sí' },
+      { num: 'ALB-2024-003', fecha: '17/01/2024', total_sin_iva: '3.600,00€', iva_porcentaje: '10%', iva: '360,00€', total: '3.960,00€', error: 'No' },
+      { num: 'ALB-2024-004', fecha: '18/01/2024', total_sin_iva: '1.375,00€', iva_porcentaje: '10%', iva: '137,50€', total: '1.512,50€', error: 'No' },
+      { num: 'ALB-2024-005', fecha: '19/01/2024', total_sin_iva: '1.400,00€', iva_porcentaje: '10%', iva: '140,00€', total: '1.540,00€', error: 'Sí' },
+      { num: 'ALB-2024-006', fecha: '20/01/2024', total_sin_iva: '1.425,00€', iva_porcentaje: '10%', iva: '142,50€', total: '1.567,50€', error: 'No' }
+    ];
+
+    // Datos ficticios para factura total
+    const facturaTotalData = [
+      { num: 'F-2024-0015', fecha: '22/01/2024', total_sin_iva: '2.250,00€', iva_porcentaje: '10%', iva: '225,00€', total: '2.475,00€', multialbaran: 'No', num_albaran: 'ALB-2024-001', error: 'No' },
+      { num: 'F-2024-0016', fecha: '23/01/2024', total_sin_iva: '1.080,00€', iva_porcentaje: '10%', iva: '108,00€', total: '1.188,00€', multialbaran: 'No', num_albaran: 'ALB-2024-002', error: 'Sí' },
+      { num: 'F-2024-0017', fecha: '24/01/2024', total_sin_iva: '3.600,00€', iva_porcentaje: '10%', iva: '360,00€', total: '3.960,00€', multialbaran: 'No', num_albaran: 'ALB-2024-003', error: 'No' },
+      { num: 'F-2024-0018', fecha: '25/01/2024', total_sin_iva: '1.375,00€', iva_porcentaje: '10%', iva: '137,50€', total: '1.512,50€', multialbaran: 'No', num_albaran: 'ALB-2024-004', error: 'No' },
+      { num: 'F-2024-0019', fecha: '26/01/2024', total_sin_iva: '1.400,00€', iva_porcentaje: '10%', iva: '140,00€', total: '1.540,00€', multialbaran: 'No', num_albaran: 'ALB-2024-005', error: 'Sí' },
+      { num: 'F-2024-0020', fecha: '27/01/2024', total_sin_iva: '5.175,00€', iva_porcentaje: '10%', iva: '517,50€', total: '5.692,50€', multialbaran: 'Sí', num_albaran: 'ALB-2024-004, ALB-2024-006', error: 'No' }
+    ];
+
     const backBtn = document.getElementById('back-btn');
     if (backBtn) {
       backBtn.addEventListener('click', (event) => {
@@ -212,94 +324,48 @@
       });
     }
 
-    let db = null;
-
-    async function initDatabase() {
-      try {
-        // Initialize SQL.js
-        const SQL = await initSqlJs({
-          locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
-        });
-
-        // Fetch the SQL schema file
-        const response = await fetch('../BDs/database.sql');
-        if (!response.ok) throw new Error('Could not load database schema');
-        const sqlText = await response.text();
-
-        // Create database and execute schema
-        db = new SQL.Database();
-        db.run(sqlText);
-
-        console.log('Database initialized successfully');
-        loadData();
-      } catch (error) {
-        console.error('Error initializing database:', error);
-        // Show error message to user
-        document.querySelector('.container').innerHTML = `
-          <div style="text-align: center; padding: 50px;">
-            <h2>Error loading database</h2>
-            <p>Please ensure the BDs/database.sql file exists and is accessible.</p>
-            <p>Error: ${error.message}</p>
-          </div>
-        `;
-      }
-    }
-
-    function loadData() {
-      const tables = ['proveedores', 'albaranes', 'facturas', 'pedidos'];
-      tables.forEach(tableName => {
-        try {
-          let query = '';
-          if (tableName === 'proveedores') {
-            query = 'SELECT cif, nombre, direccion, tlf, rsa FROM proveedores';
-          } else if (tableName === 'albaranes') {
-            query = 'SELECT num_albaran, cif_proveedor, proveedor, fecha, articulo, pais, bulto, kg, precio_por_kg, precio_por_bulto, importe, url_drive, procesado FROM albaranes';
-          } else if (tableName === 'facturas') {
-            query = 'SELECT num_factura, cif_proveedor, proveedor, fecha, articulo, pais, bulto, kg, precio_por_kg, precio_por_bulto, importe, url_drive, coincide FROM facturas';
-          } else if (tableName === 'pedidos') {
-            query = 'SELECT id, cif_proveedor, proveedor, num_albaran, fecha_albaran, num_factura, fecha_factura, total, iva_porcentaje, iva_importe FROM pedidos';
-          }
-
-          const result = db.exec(query);
-          const data = result.length > 0 ? result[0].values.map(row =>
-            result[0].columns.reduce((obj, col, index) => {
-              obj[col] = row[index];
-              return obj;
-            }, {})
-          ) : [];
-
-          populateTable(tableName, data);
-        } catch (error) {
-          console.error(`Error loading ${tableName}:`, error);
-        }
-      });
-    }
-
-    function populateTable(tableName, data) {
-      const tbody = document.querySelector(`#${tableName}-table tbody`);
-      tbody.innerHTML = ''; // Clear existing rows
+    function populateTable(tableId, data) {
+      const tbody = document.querySelector(`#${tableId} tbody`);
+      tbody.innerHTML = '';
+      
       data.forEach(row => {
         const tr = document.createElement('tr');
-        Object.values(row).forEach(value => {
+        Object.entries(row).forEach(([key, value]) => {
           const td = document.createElement('td');
-          if (typeof value === 'string' && value.startsWith('http')) {
-            // Make URLs clickable
-            const a = document.createElement('a');
-            a.href = value;
-            a.target = '_blank';
-            a.textContent = 'Ver';
-            td.appendChild(a);
-          } else {
-            td.textContent = value;
+          
+          // Añadir clases CSS basadas en el valor
+          if (key === 'error' || key === 'fallo') {
+            if (value === 'Sí' || value === 'Si') {
+              td.classList.add('error-yes');
+            } else if (value === 'No') {
+              td.classList.add('error-no');
+            }
           }
+          
+          if (key === 'comprobado' || key === 'arreglado') {
+            if (value === 'Sí' || value === 'Si') {
+              td.classList.add('status-si');
+            } else if (value === 'No') {
+              td.classList.add('status-no');
+            }
+          }
+          
+          td.textContent = value;
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
       });
     }
 
-    // Initialize database when page loads
-    window.addEventListener('DOMContentLoaded', initDatabase);
+    // Cargar todos los datos cuando la página carga
+    window.addEventListener('DOMContentLoaded', () => {
+      populateTable('proveedores-table', proveedoresData);
+      populateTable('centros-table', centrosData);
+      populateTable('albaranes-elementos-table', albaranesElementosData);
+      populateTable('facturas-elementos-table', facturasElementosData);
+      populateTable('albaran-total-table', albaranTotalData);
+      populateTable('factura-total-table', facturaTotalData);
+    });
   </script>
 </body>
 </html>

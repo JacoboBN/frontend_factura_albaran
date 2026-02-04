@@ -695,6 +695,43 @@ ipcMain.handle('create-folder', async (event, name, parentId = null) => {
   }
 });
 
+// Obtener contenido de database.sql desde Drive (Mi unidad/Bases de datos)
+ipcMain.handle('get-drive-database-sql', async () => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para cargar la base de datos');
+  }
+
+  const rootContents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId,
+    folderId: 'root'
+  });
+  const rootFolders = (rootContents.data?.files || [])
+    .filter(item => item.mimeType === 'application/vnd.google-apps.folder');
+  const basesFolder = rootFolders.find(folder => (folder.name || '').toLowerCase() === 'bases de datos');
+  if (!basesFolder) {
+    throw new Error('No se encontró la carpeta "Bases de datos" en Mi unidad');
+  }
+
+  const basesContents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId,
+    folderId: basesFolder.id
+  });
+  const files = (basesContents.data?.files || [])
+    .filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
+  const dbFile = files.find(item => (item.name || '').toLowerCase() === 'database.sql');
+  if (!dbFile) {
+    throw new Error('No se encontró el archivo database.sql en Bases de datos');
+  }
+
+  const sqlText = await downloadDriveFileToString(dbFile);
+  if (!sqlText) {
+    throw new Error('El archivo database.sql está vacío o no se pudo leer');
+  }
+
+  return { sqlText, fileName: dbFile.name, fileId: dbFile.id };
+});
+
 // Elegir carpeta para un archivo usando diálogos nativos (evita prompt())
 ipcMain.handle('choose-folder', async (event, fileName) => {
   const sessionId = store.get('sessionId');
@@ -907,33 +944,6 @@ ipcMain.handle('analyze-text', async (event, text, quality = 0.5, docType = 'alb
   }
 });
 
-ipcMain.handle('send-email', async (event, payload) => {
-  const sessionId = store.get('sessionId');
-  if (!sessionId) {
-    throw new Error('Sesión requerida para enviar email');
-  }
-
-  const { to, subject, text } = payload || {};
-  if (!to) {
-    throw new Error('Destinatario requerido');
-  }
-
-  try {
-    const response = await postWithRetry(`${BACKEND_URL}/email/send`, {
-      sessionId,
-      to,
-      subject,
-      text
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Error enviando email:', error);
-    const details = error.response?.data?.details;
-    const baseMessage = error.response?.data?.error || 'Error al enviar email';
-    const message = details ? `${baseMessage}: ${JSON.stringify(details)}` : baseMessage;
-    throw new Error(message);
-  }
-});
 
 // Mover archivo en Drive (agregar/quitar padres)
 ipcMain.handle('move-file', async (event, fileId, addParents = [], removeParents = []) => {
@@ -967,19 +977,6 @@ function isAllowedExtension(filePath) {
   return WATCHED_EXTENSIONS.includes(ext);
 }
 
-async function sendEmailNotification(subject, text) {
-  const sessionId = store.get('sessionId');
-  if (!sessionId) {
-    throw new Error('Sesión no disponible para enviar email');
-  }
-
-  await postWithRetry(`${BACKEND_URL}/email/send`, {
-    sessionId,
-    to: EMAIL_RECIPIENT,
-    subject,
-    text
-  });
-}
 
 function emitToRenderer(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1029,16 +1026,7 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
 
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
 
-  const subject = `Nuevo documento en No procesado: ${fileName}`;
-  const emailBody = [
-    `Archivo detectado: ${fileName}`,
-    `Drive ID: ${fileMeta.id}`,
-    '',
-    'Resultado IA:',
-    analysisResult.analysis || 'Sin salida de IA.'
-  ].join('\n');
-
-  await sendEmailNotification(subject, emailBody);
+  // Sin envío de email: se eliminó notificación por JSON
 
   try {
     const rootName = fileMeta.sourceRoot || '';
