@@ -157,7 +157,7 @@ async function uploadGeneratedTxtFiles(targetFolderId, analysisText, sourceFileN
   }
 }
 
-// Verificar si ya hay sesión
+// Verificar si ya hay sesión (se lanza tras login o recarga)
 checkSession();
 
 // Login con Google
@@ -195,8 +195,8 @@ async function checkSession() {
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
     showUploadSection(info);
-    await ipcRenderer.invoke('scan-no-procesado');
     toggleStartupOverlay(false);
+    await ipcRenderer.invoke('scan-no-procesado');
   } else {
     loginSection.classList.add('active');
     uploadSection.classList.remove('active');
@@ -830,7 +830,10 @@ tileButtons.forEach(tile => {
       return;
     }
     if (action === 'bases-datos') {
-      window.location.href = 'bd.html';
+      const bdWindow = window.open('bd.html', '_blank', 'width=1200,height=800');
+      if (!bdWindow) {
+        window.location.href = 'bd.html';
+      }
       return;
     }
     if (action === 'facturas') {
@@ -906,7 +909,8 @@ ipcRenderer.on('startup-status', (event, payload) => {
   if (!startupStatusEl) return;
   const message = payload?.message || 'Estado de inicio: esperando...';
   startupStatusEl.textContent = message;
-  toggleStartupOverlay(true, message);
+  // Mantener el indicador pequeño dentro de la UI durante el escaneo
+  toggleStartupOverlay(false);
 });
 
 ipcRenderer.on('queue-event', (event, payload) => {
@@ -1000,6 +1004,8 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
+
 
 
 

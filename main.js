@@ -506,9 +506,7 @@ app.whenReady().then(() => {
       });
   });
 
-  scanNoProcesado('startup').catch(err => {
-    log.error('Startup scan error', err);
-  });
+  // El escaneo de "No procesado" se lanzará desde el renderer tras iniciar sesión.
 });
 
 app.on('window-all-closed', () => {
