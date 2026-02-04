@@ -14,6 +14,8 @@ const tileButtons = document.querySelectorAll('.tile');
 const queueList = document.getElementById('upload-queue-list');
 const uploadQueue = new Map();
 const startupStatusEl = document.getElementById('startup-status');
+const startupOverlay = document.getElementById('startup-overlay');
+const startupOverlayMessage = document.getElementById('startup-overlay-message');
 
 const QUEUE_STEPS = ['Subiendo', 'OCR', 'IA', 'Enviando', 'Enviado'];
 
@@ -181,8 +183,10 @@ async function checkSession() {
 
   if (info && info.email) {
     try {
+      toggleStartupOverlay(true, 'Sesión iniciada. Esperando sincronización con Drive...');
       showStatus('Sesión iniciada. Esperando sincronización con Drive...', 'loading');
       await new Promise(resolve => setTimeout(resolve, 15000));
+      toggleStartupOverlay(true, 'Comprobando carpetas estándar en Drive...');
       showStatus('Comprobando carpetas estándar en Drive...', 'loading');
       await ipcRenderer.invoke('ensure-standard-folders');
       showStatus('Carpetas estándar verificadas en Drive.', 'success');
@@ -192,9 +196,11 @@ async function checkSession() {
     }
     showUploadSection(info);
     await ipcRenderer.invoke('scan-no-procesado');
+    toggleStartupOverlay(false);
   } else {
     loginSection.classList.add('active');
     uploadSection.classList.remove('active');
+    toggleStartupOverlay(false);
   }
 }
 
@@ -888,9 +894,19 @@ function showStatus(message, type) {
   }
 }
 
+function toggleStartupOverlay(isVisible, message) {
+  if (!startupOverlay) return;
+  if (message && startupOverlayMessage) {
+    startupOverlayMessage.textContent = message;
+  }
+  startupOverlay.classList.toggle('active', Boolean(isVisible));
+}
+
 ipcRenderer.on('startup-status', (event, payload) => {
   if (!startupStatusEl) return;
-  startupStatusEl.textContent = payload?.message || 'Estado de inicio: esperando...';
+  const message = payload?.message || 'Estado de inicio: esperando...';
+  startupStatusEl.textContent = message;
+  toggleStartupOverlay(true, message);
 });
 
 ipcRenderer.on('queue-event', (event, payload) => {
@@ -984,6 +1000,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 

@@ -351,10 +351,76 @@
       font-size: 13px;
       margin-top: 8px;
     }
+
+    .startup-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 15, 15, 0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+
+    .startup-overlay.active {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .startup-overlay-card {
+      background: #ffffff;
+      padding: 32px 40px;
+      border-radius: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      min-width: 280px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+      text-align: center;
+    }
+
+    .startup-spinner {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: 6px solid #e0e0e0;
+      border-top-color: #007bff;
+      animation: spin 1s linear infinite;
+    }
+
+    .startup-overlay-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1f1f1f;
+    }
+
+    .startup-overlay-message {
+      font-size: 14px;
+      color: #555;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
     <div id="status" class="status"></div>
+
+    <div class="startup-overlay" id="startup-overlay">
+      <div class="startup-overlay-card">
+        <div class="startup-spinner"></div>
+        <div class="startup-overlay-title">Revisando carpetas...</div>
+        <div class="startup-overlay-message" id="startup-overlay-message">
+          Preparando la sincronización con Drive.
+        </div>
+      </div>
+    </div>
 
     <!-- Login Section -->
     <div class="section active" id="login-section">
