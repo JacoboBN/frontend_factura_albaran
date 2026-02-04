@@ -273,7 +273,17 @@ async function uploadFilesToFolder(parentFolderName) {
               });
 
               if (compareResult && !compareResult.ok) {
-                console.warn('Incongruencias en factura:', compareResult);
+                await ipcRenderer.invoke('send-email', {
+                  to: 'bgoptimizing@gmail.com',
+                  subject: `Incongruencias en factura ${fileName}`,
+                  text: [
+                    `Factura: ${fileName}`,
+                    compareResult.message || 'Se encontraron incongruencias.',
+                    '',
+                    'Detalles:',
+                    ...(compareResult.issues || []).map(issue => `- ${issue}`)
+                  ].join('\n')
+                });
               }
 
               if (documentosFolder?.id) {
@@ -983,6 +993,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 

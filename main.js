@@ -294,6 +294,20 @@ async function postWithRetry(url, data, options = {}) {
   }
 }
 
+async function sendEmailNotification(subject, text) {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para enviar email');
+  }
+
+  await postWithRetry(`${BACKEND_URL}/email/send`, {
+    sessionId,
+    to: EMAIL_RECIPIENT,
+    subject,
+    text
+  });
+}
+
 async function uploadLocalFileToDrive(sessionId, filePath, targetFolderId) {
   const formData = new FormData();
   formData.append('sessionId', sessionId);
@@ -941,6 +955,35 @@ ipcMain.handle('analyze-text', async (event, text, quality = 0.5, docType = 'alb
   } catch (error) {
     console.error('Error analizando texto:', error);
     throw new Error(error.response?.data?.error || 'Error al analizar texto');
+  }
+});
+
+// Enviar email (solo usado en comparaciones factura vs albarán)
+ipcMain.handle('send-email', async (event, payload) => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para enviar email');
+  }
+
+  const { to, subject, text } = payload || {};
+  if (!to) {
+    throw new Error('Destinatario requerido');
+  }
+
+  try {
+    const response = await postWithRetry(`${BACKEND_URL}/email/send`, {
+      sessionId,
+      to,
+      subject,
+      text
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error enviando email:', error);
+    const details = error.response?.data?.details;
+    const baseMessage = error.response?.data?.error || 'Error al enviar email';
+    const message = details ? `${baseMessage}: ${JSON.stringify(details)}` : baseMessage;
+    throw new Error(message);
   }
 });
 
