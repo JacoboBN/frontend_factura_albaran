@@ -611,6 +611,38 @@ ipcMain.handle('share-folder', async (event, emails, folderId = null) => {
   }
 });
 
+// Compartir Albaranes/No procesado
+ipcMain.handle('share-no-procesado-albaranes', async (event, emails = []) => {
+  const sessionId = store.get('sessionId');
+
+  try {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/share-no-procesado-albaranes`, {
+      sessionId,
+      emails
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error compartiendo No procesado:', error);
+    throw new Error(error.response?.data?.error || 'Error al compartir carpeta');
+  }
+});
+
+ipcMain.handle('get-no-procesado-shared-emails', async () => {
+  const sessionId = store.get('sessionId');
+
+  try {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/no-procesado-shared-emails`, {
+      sessionId
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error obteniendo emails de No procesado:', error);
+    throw new Error(error.response?.data?.error || 'Error al obtener permisos de carpeta');
+  }
+});
+
 // Subir archivo
 ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => {
   const sessionId = store.get('sessionId');

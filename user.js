@@ -342,6 +342,8 @@ const createFolderBtn = document.getElementById('create-folder-btn');
 const createFolderNameInput = document.getElementById('create-folder-name');
 const shareBtn = document.getElementById('share-btn');
 const shareEmailsInput = document.getElementById('share-emails');
+const noProcesadoShareBtn = document.getElementById('no-procesado-share-btn');
+const noProcesadoShareEmailInput = document.getElementById('no-procesado-share-email');
 
 if (createFolderBtn) {
   createFolderBtn.addEventListener('click', async () => {
@@ -392,11 +394,46 @@ if (shareBtn) {
   });
 }
 
+if (noProcesadoShareBtn) {
+  noProcesadoShareBtn.addEventListener('click', async () => {
+    const email = noProcesadoShareEmailInput?.value.trim();
+    if (!email) {
+      showStatus('Por favor ingresa un email válido', 'error');
+      return;
+    }
+
+    try {
+      noProcesadoShareBtn.textContent = 'Compartiendo...';
+      noProcesadoShareBtn.disabled = true;
+      await ipcRenderer.invoke('share-no-procesado-albaranes', [email]);
+      showStatus('Carpeta No procesado compartida', 'success');
+      noProcesadoShareEmailInput.value = '';
+      await refreshSharedLists();
+    } catch (err) {
+      showStatus('Error al compartir: ' + err.message, 'error');
+    } finally {
+      noProcesadoShareBtn.textContent = 'Compartir';
+      noProcesadoShareBtn.disabled = false;
+    }
+  });
+}
+
 // Refrescar listas de usuarios compartidos en la UI (admin y main)
 async function refreshSharedLists() {
   try {
     const info = await ipcRenderer.invoke('get-user-info');
     const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
+    let sharedNoProcesado = [];
+
+    try {
+      const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
+      sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
+    } catch (e) {
+      console.warn('No se pudo leer permisos en vivo de No procesado:', e);
+      sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
+        ? info.sharedNoProcesadoEmails
+        : [];
+    }
 
     const sharedEmailsList = document.getElementById('shared-emails-list');
     if (sharedEmailsList) {
@@ -424,6 +461,21 @@ async function refreshSharedLists() {
           div.className = 'shared-item';
           div.textContent = email;
           mainShared.appendChild(div);
+        });
+      }
+    }
+
+    const noProcesadoList = document.getElementById('no-procesado-shared-list');
+    if (noProcesadoList) {
+      noProcesadoList.innerHTML = '';
+      if (sharedNoProcesado.length === 0) {
+        noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+      } else {
+        sharedNoProcesado.forEach(email => {
+          const div = document.createElement('div');
+          div.className = 'shared-item';
+          div.textContent = email;
+          noProcesadoList.appendChild(div);
         });
       }
     }
@@ -993,6 +1045,8 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
+
 
 
 
