@@ -206,6 +206,68 @@
       gap: 12px;
     }
 
+    .search-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .search-input {
+      min-width: 240px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #c7c7c7;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .search-results {
+      background: #ffffff;
+      border: 1px solid #d2d2d2;
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    .search-results.active {
+      display: flex;
+    }
+
+    .search-result-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .search-result-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .search-result-title {
+      font-weight: 600;
+      color: #222;
+      font-size: 14px;
+      word-break: break-word;
+    }
+
+    .search-result-path {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .search-result-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .nav {
       display: flex;
       align-items: center;
@@ -504,10 +566,12 @@
               <button id="back-btn" class="btn small">Atrás</button>
               <div id="breadcrumbs" class="breadcrumbs"></div>
             </div>
-            <!-- <div class="actions">
-              <a href="compare.html"><button class="btn">Comparar</button></a>
-            </div> -->
+            <div class="actions search-actions">
+              <input id="search-input" class="search-input" type="text" placeholder="Buscar documentos por nombre..." />
+            </div>
           </div>
+
+          <div id="search-results" class="search-results"></div>
 
           <section class="dashboard">
             <button class="tile disabled" data-action="centros" disabled>Centros</button>

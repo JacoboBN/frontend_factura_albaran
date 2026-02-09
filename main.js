@@ -643,6 +643,22 @@ ipcMain.handle('get-no-procesado-shared-emails', async () => {
   }
 });
 
+ipcMain.handle('search-drive-files', async (event, query) => {
+  const sessionId = store.get('sessionId');
+
+  try {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/search-files`, {
+      sessionId,
+      query
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error buscando archivos en Drive:', error);
+    throw new Error(error.response?.data?.error || 'Error al buscar archivos');
+  }
+});
+
 // Subir archivo
 ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => {
   const sessionId = store.get('sessionId');

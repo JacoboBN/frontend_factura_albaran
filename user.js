@@ -11,6 +11,9 @@ const logoutBtn = document.getElementById('logout-btn');
 const menuButtons = document.querySelectorAll('.menu-item');
 const tileButtons = document.querySelectorAll('.tile');
 
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+
 const queueList = document.getElementById('upload-queue-list');
 const uploadQueue = new Map();
 const startupStatusEl = document.getElementById('startup-status');
@@ -334,6 +337,97 @@ async function uploadFilesToFolder(parentFolderName) {
 if (fileUpload) {
   fileUpload.addEventListener('click', async () => {
     await uploadFilesToFolder('Albaranes');
+  });
+}
+
+let searchDebounce = null;
+
+function renderSearchResults(items = [], query = '') {
+  if (!searchResults) return;
+
+  const trimmed = query.trim();
+  if (!trimmed) {
+    searchResults.classList.remove('active');
+    searchResults.innerHTML = '';
+    return;
+  }
+
+  searchResults.classList.add('active');
+  searchResults.innerHTML = '';
+
+  if (!items.length) {
+    searchResults.innerHTML = '<p style="color:#666">No se encontraron documentos.</p>';
+    return;
+  }
+
+  items.forEach(item => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'search-result-item';
+
+    const title = document.createElement('div');
+    title.className = 'search-result-title';
+    title.textContent = item.name || 'Documento';
+
+    const path = document.createElement('div');
+    path.className = 'search-result-path';
+    const folderPath = item.folderPath || 'Mi unidad';
+    path.textContent = folderPath;
+
+    const actions = document.createElement('div');
+    actions.className = 'search-result-actions';
+
+    const openFileBtn = document.createElement('button');
+    openFileBtn.className = 'btn small';
+    openFileBtn.textContent = 'Abrir archivo';
+    openFileBtn.addEventListener('click', () => {
+      if (!item.id) return;
+      const url = `https://drive.google.com/file/d/${item.id}/view`;
+      ipcRenderer.invoke('open-external', url);
+    });
+
+    const openFolderBtn = document.createElement('button');
+    openFolderBtn.className = 'btn small btn-secondary';
+    openFolderBtn.textContent = 'Abrir carpeta';
+    openFolderBtn.addEventListener('click', async () => {
+      if (!item.parentId) return;
+      await loadFolderContents(item.parentId, true, item.parentName || 'Carpeta');
+    });
+
+    actions.appendChild(openFileBtn);
+    actions.appendChild(openFolderBtn);
+
+    wrapper.appendChild(title);
+    wrapper.appendChild(path);
+    wrapper.appendChild(actions);
+    searchResults.appendChild(wrapper);
+  });
+}
+
+async function performSearch(query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    renderSearchResults([], '');
+    return;
+  }
+
+  try {
+    const response = await ipcRenderer.invoke('search-drive-files', trimmed);
+    const items = Array.isArray(response?.files) ? response.files : [];
+    renderSearchResults(items, trimmed);
+  } catch (error) {
+    console.error('Error en búsqueda:', error);
+    renderSearchResults([], trimmed);
+    showStatus('No se pudo completar la búsqueda', 'error');
+  }
+}
+
+if (searchInput) {
+  searchInput.addEventListener('input', (event) => {
+    const value = event.target.value || '';
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      performSearch(value);
+    }, 350);
   });
 }
 
@@ -1045,6 +1139,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 
