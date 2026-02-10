@@ -20,7 +20,7 @@ const startupStatusEl = document.getElementById('startup-status');
 const startupOverlay = document.getElementById('startup-overlay');
 const startupOverlayMessage = document.getElementById('startup-overlay-message');
 
-const QUEUE_STEPS = ['Subiendo', 'OCR', 'IA', 'Enviando', 'Enviado'];
+const QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
 
 function sanitizeFileName(name) {
   return String(name || '')
@@ -255,11 +255,8 @@ async function uploadFilesToFolder(parentFolderName) {
             throw new Error('Error al subir archivo');
           }
 
-          updateQueueStep(queueId, 'OCR');
-          const ocrResult = await ipcRenderer.invoke('ocr-document', p, '', fileName);
-
           updateQueueStep(queueId, 'IA');
-          const analysisResult = await ipcRenderer.invoke('analyze-text', ocrResult.text, ocrResult.quality || 0.5, docType);
+          const analysisResult = await ipcRenderer.invoke('analyze-file', p, '', fileName, docType);
 
           updateQueueStep(queueId, 'Enviando');
 
@@ -1139,6 +1136,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 

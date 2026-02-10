@@ -17,17 +17,21 @@ log.transports.file.level = 'info';
 autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
 
-// URL del backend en Render (siempre usa esta URL ya que el backend está en producción)
-const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
+// URL del backend (permite override por variable de entorno)
+const BACKEND_URL = process.env.BACKEND_URL || 'https://backend-factura-albaran.onrender.com';
+const LOCAL_BACKEND_CANDIDATES = ['http://127.0.0.1:3000', 'http://localhost:3000'];
 const DEFAULT_TIMEOUT_MS = 20000;
-const OCR_RETRY_ATTEMPTS = 2;
-const OCR_RETRY_DELAY_MS = 2000;
 const LOCAL_LOGIN_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 días desde login
 const LOCAL_INACTIVITY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días sin abrir app
 
 const ANALYZE_ENDPOINTS = {
   albaran: '/analyze/document/albaran',
   factura: '/analyze/document/factura'
+};
+
+const ANALYZE_FILE_ENDPOINTS = {
+  albaran: '/analyze/document/albaran/file',
+  factura: '/analyze/document/factura/file'
 };
 
 function normalizeDocumentType(value) {
@@ -261,6 +265,60 @@ function getAnalyzeEndpoint(docType) {
   return `${BACKEND_URL}${endpoint}`;
 }
 
+function getAnalyzeFileEndpoint(docType) {
+  const key = normalizeDocumentType(docType);
+  const endpoint = ANALYZE_FILE_ENDPOINTS[key] || ANALYZE_FILE_ENDPOINTS.albaran;
+  return `${BACKEND_URL}${endpoint}`;
+}
+
+function getAnalyzeFileEndpointFromBase(baseUrl, docType) {
+  const key = normalizeDocumentType(docType);
+  const endpoint = ANALYZE_FILE_ENDPOINTS[key] || ANALYZE_FILE_ENDPOINTS.albaran;
+  return `${baseUrl}${endpoint}`;
+}
+
+function getAnalyzeBackendCandidates() {
+  const list = [BACKEND_URL, ...LOCAL_BACKEND_CANDIDATES].filter(Boolean);
+  return [...new Set(list)];
+}
+
+async function postAnalyzeFileWithFallback(docType, { filePath, mimeType, originalName, sessionId }) {
+  let lastError = null;
+
+  for (const baseUrl of getAnalyzeBackendCandidates()) {
+    const formData = new FormData();
+    formData.append('sessionId', sessionId);
+    formData.append('file', fs.createReadStream(filePath), {
+      filename: originalName || path.basename(filePath),
+      contentType: mimeType || undefined
+    });
+
+    try {
+      return await postWithRetry(getAnalyzeFileEndpointFromBase(baseUrl, docType), formData, {
+        timeout: 120000,
+        retries: 1,
+        axiosOptions: {
+          headers: {
+            ...formData.getHeaders()
+          },
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
+        }
+      });
+    } catch (error) {
+      lastError = error;
+      const status = error?.response?.status;
+      const code = error?.code;
+      const retryOnNextBackend = status === 404 || code === 'ECONNREFUSED' || code === 'ENOTFOUND';
+      if (!retryOnNextBackend) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error('No se pudo conectar con un backend compatible para analizar archivos');
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -365,21 +423,6 @@ async function waitForFileReady(filePath, attempts = 8, delayMs = 500) {
     await sleep(delayMs);
   }
   return false;
-}
-
-async function performLocalOCRWithRetry(filePath, mimeType, originalName) {
-  let attempt = 0;
-  while (attempt <= OCR_RETRY_ATTEMPTS) {
-    try {
-      return await performLocalOCR(filePath, mimeType, originalName);
-    } catch (error) {
-      if (attempt >= OCR_RETRY_ATTEMPTS) {
-        throw error;
-      }
-      await sleep(OCR_RETRY_DELAY_MS);
-      attempt += 1;
-    }
-  }
 }
 
 // Helper function to get binary paths
@@ -1077,14 +1120,11 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
   const sessionId = store.get('sessionId');
 
   try {
-    // Perform local OCR
-    const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
-
-    // Send extracted text to backend for AI analysis
-    const response = await postWithRetry(getAnalyzeEndpoint(docType), {
-      text: ocrResult.text,
-      quality: ocrResult.quality,
-      sessionId: sessionId
+    const response = await postAnalyzeFileWithFallback(docType, {
+      filePath,
+      mimeType,
+      originalName,
+      sessionId
     });
 
     return response.data;
@@ -1119,6 +1159,27 @@ ipcMain.handle('analyze-text', async (event, text, quality = 0.5, docType = 'alb
   } catch (error) {
     console.error('Error analizando texto:', error);
     throw new Error(error.response?.data?.error || 'Error al analizar texto');
+  }
+});
+
+ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalName = '', docType = 'albaran') => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para analizar documento');
+  }
+
+  try {
+    const response = await postAnalyzeFileWithFallback(docType, {
+      filePath,
+      mimeType,
+      originalName,
+      sessionId
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error analizando archivo con IA:', error);
+    throw new Error(error.response?.data?.error || 'Error al analizar documento con IA');
   }
 });
 
@@ -1206,14 +1267,21 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   const fileName = fileMeta.name || 'Archivo';
 
   emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
-  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
+  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
 
   const { localPath, mimeType } = await downloadDriveFileToTemp(fileMeta, fileName);
   const ready = await waitForFileReady(localPath);
   if (!ready) {
-    throw new Error('Archivo descargado no disponible para OCR');
+    throw new Error('Archivo descargado no disponible para IA');
   }
-  const ocrResult = await performLocalOCRWithRetry(localPath, mimeType, fileName);
+
+  const docType = normalizeDocumentType(fileMeta?.sourceRoot);
+  const analysisResult = await postAnalyzeFileWithFallback(docType, {
+    filePath: localPath,
+    mimeType,
+    originalName: fileName,
+    sessionId: store.get('sessionId')
+  }).then(res => res.data);
 
   try {
     if (localPath && fs.existsSync(localPath)) {
@@ -1222,14 +1290,6 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   } catch (cleanupError) {
     log.warn('No se pudo limpiar archivo temporal descargado:', cleanupError);
   }
-
-  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-  const docType = normalizeDocumentType(fileMeta?.sourceRoot);
-  const analysisResult = await postWithRetry(getAnalyzeEndpoint(docType), {
-    text: ocrResult.text,
-    quality: ocrResult.quality,
-    sessionId: store.get('sessionId')
-  }).then(res => res.data);
 
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
 
