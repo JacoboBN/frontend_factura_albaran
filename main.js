@@ -22,6 +22,8 @@ const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
 const DEFAULT_TIMEOUT_MS = 20000;
 const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
+const LOCAL_LOGIN_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 días desde login
+const LOCAL_INACTIVITY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días sin abrir app
 
 const ANALYZE_ENDPOINTS = {
   albaran: '/analyze/document/albaran',
@@ -459,6 +461,115 @@ const startupScanState = {
   waitingForSession: false
 };
 
+function getAuthState() {
+  return store.get('authState') || null;
+}
+
+function setAuthState(state) {
+  store.set('authState', state);
+}
+
+function clearAuthState() {
+  store.delete('authState');
+}
+
+function isLocalSessionPolicyValid(authState) {
+  if (!authState) return false;
+  const now = Date.now();
+  const loginAt = Number(authState.loginAt || 0);
+  const lastActiveAt = Number(authState.lastActiveAt || 0);
+  if (!loginAt || !lastActiveAt) return false;
+
+  const ageFromLogin = now - loginAt;
+  const ageFromLastActive = now - lastActiveAt;
+
+  return ageFromLogin <= LOCAL_LOGIN_MAX_AGE_MS && ageFromLastActive <= LOCAL_INACTIVITY_MAX_AGE_MS;
+}
+
+function persistInteractiveLogin({ sessionId, refreshToken, isUser }) {
+  const now = Date.now();
+  store.set('sessionId', sessionId);
+  setAuthState({
+    sessionId,
+    refreshToken: refreshToken || null,
+    isUser: Boolean(isUser),
+    loginAt: now,
+    lastActiveAt: now
+  });
+}
+
+function touchLocalActivity(sessionIdOverride = null) {
+  const authState = getAuthState();
+  if (!authState) return;
+  setAuthState({
+    ...authState,
+    sessionId: sessionIdOverride || authState.sessionId || store.get('sessionId') || null,
+    lastActiveAt: Date.now()
+  });
+}
+
+async function ensureLocalSessionReady() {
+  const authState = getAuthState();
+
+  if (!authState || !isLocalSessionPolicyValid(authState)) {
+    store.delete('sessionId');
+    clearAuthState();
+    return null;
+  }
+
+  const currentSessionId = store.get('sessionId') || authState.sessionId;
+  if (currentSessionId) {
+    try {
+      const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId: currentSessionId }, { retries: 1 });
+      const refreshToken = verifyResp?.data?.refreshToken || authState.refreshToken || null;
+      store.set('sessionId', currentSessionId);
+      setAuthState({
+        ...authState,
+        sessionId: currentSessionId,
+        refreshToken,
+        lastActiveAt: Date.now()
+      });
+      return verifyResp.data;
+    } catch (error) {
+      // Si falla verificación, intentamos reautenticación silenciosa
+    }
+  }
+
+  if (!authState.refreshToken) {
+    store.delete('sessionId');
+    clearAuthState();
+    return null;
+  }
+
+  try {
+    const silentResp = await postWithRetry(`${BACKEND_URL}/auth/silent-login`, {
+      refreshToken: authState.refreshToken,
+      isUser: Boolean(authState.isUser)
+    }, { retries: 1 });
+
+    const newSessionId = silentResp?.data?.sessionId;
+    if (!newSessionId) {
+      throw new Error('Silent login sin sessionId');
+    }
+
+    const newRefreshToken = silentResp?.data?.refreshToken || authState.refreshToken;
+    store.set('sessionId', newSessionId);
+    setAuthState({
+      ...authState,
+      sessionId: newSessionId,
+      refreshToken: newRefreshToken,
+      // Mantener loginAt original para cumplir máx 90 días desde login
+      lastActiveAt: Date.now()
+    });
+
+    return silentResp.data;
+  } catch (error) {
+    store.delete('sessionId');
+    clearAuthState();
+    return null;
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
@@ -548,7 +659,13 @@ ipcMain.handle('google-login', async (event, isUser = false) => {
     await shell.openExternal(authUrl);
     
     // Esperar a que el usuario complete el login (polling)
-    return await waitForAuth(sessionId);
+    const userData = await waitForAuth(sessionId);
+    persistInteractiveLogin({
+      sessionId,
+      refreshToken: userData?.refreshToken || null,
+      isUser: Boolean(isUser)
+    });
+    return userData;
     
   } catch (error) {
     console.error('Error en login:', error);
@@ -885,16 +1002,15 @@ function promptForFolderName(defaultName) {
 
 // Obtener información de la sesión
 ipcMain.handle('get-user-info', async () => {
+  const ready = await ensureLocalSessionReady();
   const sessionId = store.get('sessionId');
-  
-  if (!sessionId) {
-    return null;
-  }
+  if (!ready || !sessionId) return null;
   
   try {
     const response = await postWithRetry(`${BACKEND_URL}/session/info`, {
       sessionId
     });
+    touchLocalActivity(sessionId);
     
     return response.data;
   } catch (error) {
@@ -1546,6 +1662,7 @@ ipcMain.handle('logout', async () => {
   }
 
   store.clear();
+  clearAuthState();
   app.relaunch();
   app.quit();
 });
