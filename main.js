@@ -354,19 +354,19 @@ async function postWithRetry(url, data, options = {}) {
   }
 }
 
-// async function sendEmailNotification(subject, text) {
-//   const sessionId = store.get('sessionId');
-//   if (!sessionId) {
-//     throw new Error('Sesión requerida para enviar email');
-//   }
+async function sendEmailNotification(subject, text) {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para enviar email');
+  }
 
-//   await postWithRetry(`${BACKEND_URL}/email/send`, {
-//     sessionId,
-//     to: EMAIL_RECIPIENT,
-//     subject,
-//     text
-//   });
-// }
+  await postWithRetry(`${BACKEND_URL}/email/send`, {
+    sessionId,
+    to: EMAIL_RECIPIENT,
+    subject,
+    text
+  });
+}
 
 async function uploadLocalFileToDrive(sessionId, filePath, targetFolderId) {
   const formData = new FormData();
