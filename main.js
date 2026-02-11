@@ -26,8 +26,8 @@ const LOCAL_LOGIN_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 días desde login
 const LOCAL_INACTIVITY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días sin abrir app
 
 const ANALYZE_ENDPOINTS = {
-  albaran: '/analyze/document/albaran',
-  factura: '/analyze/document/factura'
+  albaran: '/analyze/document/albaran/file',
+  factura: '/analyze/document/factura/file'
 };
 
 function normalizeDocumentType(value) {
