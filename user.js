@@ -22,6 +22,33 @@ const startupOverlayMessage = document.getElementById('startup-overlay-message')
 
 const QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
 
+function guessMimeTypeFromPath(filePath = '') {
+  const ext = (path.extname(filePath || '') || '').toLowerCase();
+  const mimeByExt = {
+    '.pdf': 'application/pdf',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.bmp': 'image/bmp',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.txt': 'text/plain'
+  };
+  return mimeByExt[ext] || '';
+}
+
+async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, docType) {
+  try {
+    return await ipcRenderer.invoke('analyze-file', filePath, mimeType, originalName, docType);
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (message.includes("No handler registered for 'analyze-file'")) {
+      return ipcRenderer.invoke('analyze-document', filePath, mimeType, originalName, docType);
+    }
+    throw error;
+  }
+}
+
 function sanitizeFileName(name) {
   return String(name || '')
     .replace(/[\\/:*?"<>|]/g, '_')
@@ -256,7 +283,11 @@ async function uploadFilesToFolder(parentFolderName) {
           }
 
           updateQueueStep(queueId, 'IA');
-          const analysisResult = await ipcRenderer.invoke('analyze-file', p, '', fileName, docType);
+          const mimeType = guessMimeTypeFromPath(p);
+          const analysisResult = await invokeAnalyzeFileWithFallback(p, mimeType, fileName, docType);
+          if (!analysisResult || !analysisResult.success) {
+            throw new Error('Error al analizar archivo');
+          }
 
           updateQueueStep(queueId, 'Enviando');
 
@@ -273,17 +304,23 @@ async function uploadFilesToFolder(parentFolderName) {
               });
 
               if (compareResult && !compareResult.ok) {
-                await ipcRenderer.invoke('send-email', {
-                  to: 'bgoptimizing@gmail.com',
-                  subject: `Incongruencias en factura ${fileName}`,
-                  text: [
-                    `Factura: ${fileName}`,
-                    compareResult.message || 'Se encontraron incongruencias.',
-                    '',
-                    'Detalles:',
-                    ...(compareResult.issues || []).map(issue => `- ${issue}`)
-                  ].join('\n')
-                });
+                try {
+                  await ipcRenderer.invoke('send-email', {
+                    to: 'bgoptimizing@gmail.com',
+                    subject: `Incongruencias en factura ${fileName}`,
+                    text: [
+                      `Factura: ${fileName}`,
+                      compareResult.message || 'Se encontraron incongruencias.',
+                      '',
+                      'Detalles:',
+                      ...(compareResult.issues || []).map(issue => `- ${issue}`)
+                    ].join('\n')
+                  });
+                  showStatus(`Email de incongruencias enviado para ${fileName}`, 'success');
+                } catch (emailError) {
+                  console.error('Error enviando email de incongruencias:', emailError);
+                  showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
+                }
               }
 
               if (documentosFolder?.id) {
@@ -1136,6 +1173,7 @@ function renderQueue() {
     queueList.appendChild(wrapper);
   });
 }
+
 
 
 

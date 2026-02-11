@@ -1094,6 +1094,61 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
   }
 });
 
+// Alias de compatibilidad: algunos flujos llaman a 'analyze-file'
+// Mantiene compatibilidad incluso si el backend aún no expone /analyze/document/*/file.
+ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalName = '', docType = 'albaran') => {
+  const sessionId = store.get('sessionId');
+
+  try {
+    // 1) Intento IA directa por archivo (nuevo backend)
+    const formData = new FormData();
+    formData.append('sessionId', sessionId);
+    formData.append('file', fs.createReadStream(filePath), {
+      filename: originalName || path.basename(filePath),
+      contentType: mimeType || undefined
+    });
+
+    const endpoint = docType === 'factura'
+      ? `${BACKEND_URL}/analyze/document/factura/file`
+      : `${BACKEND_URL}/analyze/document/albaran/file`;
+
+    const directResponse = await postWithRetry(endpoint, formData, {
+      timeout: 120000,
+      retries: 1,
+      axiosOptions: {
+        headers: {
+          ...formData.getHeaders()
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      }
+    });
+
+    return directResponse.data;
+  } catch (error) {
+    const status = error?.response?.status;
+    const cannotUseFileEndpoint = status === 404;
+    if (!cannotUseFileEndpoint) {
+      console.error('Error analizando archivo con IA:', error);
+      throw new Error(error.response?.data?.error || 'Error al analizar documento con IA');
+    }
+
+    // 2) Fallback compatible: OCR local + IA por texto (backend antiguo)
+    try {
+      const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
+      const textResponse = await postWithRetry(getAnalyzeEndpoint(docType), {
+        text: ocrResult.text,
+        quality: ocrResult.quality,
+        sessionId
+      });
+      return textResponse.data;
+    } catch (fallbackError) {
+      console.error('Error en fallback analyze-file:', fallbackError);
+      throw new Error(fallbackError.response?.data?.error || fallbackError.message || 'Error al analizar documento');
+    }
+  }
+});
+
 ipcMain.handle('ocr-document', async (event, filePath, mimeType, originalName) => {
   try {
     return await performLocalOCR(filePath, mimeType, originalName);
