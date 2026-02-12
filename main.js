@@ -30,6 +30,11 @@ const ANALYZE_ENDPOINTS = {
   factura: '/analyze/document/factura/file'
 };
 
+const LEGACY_ANALYZE_TEXT_ENDPOINTS = {
+  albaran: '/analyze/document/albaran',
+  factura: '/analyze/document/factura'
+};
+
 function normalizeDocumentType(value) {
   const normalized = (value || '').toString().toLowerCase();
   if (normalized.includes('factura')) return 'factura';
@@ -259,6 +264,61 @@ function getAnalyzeEndpoint(docType) {
   const key = normalizeDocumentType(docType);
   const endpoint = ANALYZE_ENDPOINTS[key] || ANALYZE_ENDPOINTS.albaran;
   return `${BACKEND_URL}${endpoint}`;
+}
+
+function getLegacyAnalyzeTextEndpoint(docType) {
+  const key = normalizeDocumentType(docType);
+  const endpoint = LEGACY_ANALYZE_TEXT_ENDPOINTS[key] || LEGACY_ANALYZE_TEXT_ENDPOINTS.albaran;
+  return `${BACKEND_URL}${endpoint}`;
+}
+
+async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = '', docType = 'albaran') {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para analizar documento');
+  }
+
+  // 1) Flujo principal: enviar el ARCHIVO real al backend para que lo procese con OpenAI.
+  try {
+    const formData = new FormData();
+    formData.append('sessionId', sessionId);
+    formData.append('file', fs.createReadStream(filePath), {
+      filename: originalName || path.basename(filePath),
+      contentType: mimeType || undefined
+    });
+
+    const fileEndpoint = getAnalyzeEndpoint(docType);
+    const directResponse = await postWithRetry(fileEndpoint, formData, {
+      timeout: 120000,
+      retries: 1,
+      axiosOptions: {
+        headers: {
+          ...formData.getHeaders()
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      }
+    });
+
+    return directResponse.data;
+  } catch (error) {
+    const status = error?.response?.status;
+    const canTryLegacyTextMode = status === 404;
+    if (!canTryLegacyTextMode) {
+      throw error;
+    }
+
+    // 2) Compatibilidad con backend antiguo (sin endpoint /file): OCR local + envío de texto.
+    const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
+    const textEndpoint = getLegacyAnalyzeTextEndpoint(docType);
+    const textResponse = await postWithRetry(textEndpoint, {
+      text: ocrResult.text,
+      quality: ocrResult.quality,
+      sessionId
+    });
+
+    return textResponse.data;
+  }
 }
 
 function sleep(ms) {
@@ -1074,20 +1134,8 @@ async function getOrCreateAlbaranesNoProcesadoFolder(sessionId) {
 
 // Analyze document with local OCR and AI analysis
 ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalName, docType = 'albaran') => {
-  const sessionId = store.get('sessionId');
-
   try {
-    // Perform local OCR
-    const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
-
-    // Send extracted text to backend for AI analysis
-    const response = await postWithRetry(getAnalyzeEndpoint(docType), {
-      text: ocrResult.text,
-      quality: ocrResult.quality,
-      sessionId: sessionId
-    });
-
-    return response.data;
+    return await analyzeFileWithBackendIA(filePath, mimeType, originalName, docType);
   } catch (error) {
     console.error('Error analyzing document:', error);
     throw new Error(error.response?.data?.error || 'Error al analizar el documento');
@@ -1097,55 +1145,11 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
 // Alias de compatibilidad: algunos flujos llaman a 'analyze-file'
 // Mantiene compatibilidad incluso si el backend aún no expone /analyze/document/*/file.
 ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalName = '', docType = 'albaran') => {
-  const sessionId = store.get('sessionId');
-
   try {
-    // 1) Intento IA directa por archivo (nuevo backend)
-    const formData = new FormData();
-    formData.append('sessionId', sessionId);
-    formData.append('file', fs.createReadStream(filePath), {
-      filename: originalName || path.basename(filePath),
-      contentType: mimeType || undefined
-    });
-
-    const endpoint = docType === 'factura'
-      ? `${BACKEND_URL}/analyze/document/factura/file`
-      : `${BACKEND_URL}/analyze/document/albaran/file`;
-
-    const directResponse = await postWithRetry(endpoint, formData, {
-      timeout: 120000,
-      retries: 1,
-      axiosOptions: {
-        headers: {
-          ...formData.getHeaders()
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
-      }
-    });
-
-    return directResponse.data;
+    return await analyzeFileWithBackendIA(filePath, mimeType, originalName, docType);
   } catch (error) {
-    const status = error?.response?.status;
-    const cannotUseFileEndpoint = status === 404;
-    if (!cannotUseFileEndpoint) {
-      console.error('Error analizando archivo con IA:', error);
-      throw new Error(error.response?.data?.error || 'Error al analizar documento con IA');
-    }
-
-    // 2) Fallback compatible: OCR local + IA por texto (backend antiguo)
-    try {
-      const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
-      const textResponse = await postWithRetry(getAnalyzeEndpoint(docType), {
-        text: ocrResult.text,
-        quality: ocrResult.quality,
-        sessionId
-      });
-      return textResponse.data;
-    } catch (fallbackError) {
-      console.error('Error en fallback analyze-file:', fallbackError);
-      throw new Error(fallbackError.response?.data?.error || fallbackError.message || 'Error al analizar documento');
-    }
+    console.error('Error analizando archivo con IA:', error);
+    throw new Error(error.response?.data?.error || 'Error al analizar documento con IA');
   }
 });
 
@@ -1165,7 +1169,7 @@ ipcMain.handle('analyze-text', async (event, text, quality = 0.5, docType = 'alb
   }
 
   try {
-    const response = await postWithRetry(getAnalyzeEndpoint(docType), {
+    const response = await postWithRetry(getLegacyAnalyzeTextEndpoint(docType), {
       text,
       quality,
       sessionId
@@ -1264,49 +1268,47 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
   emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
 
   const { localPath, mimeType } = await downloadDriveFileToTemp(fileMeta, fileName);
-  const ready = await waitForFileReady(localPath);
-  if (!ready) {
-    throw new Error('Archivo descargado no disponible para OCR');
-  }
-  const ocrResult = await performLocalOCRWithRetry(localPath, mimeType, fileName);
 
   try {
-    if (localPath && fs.existsSync(localPath)) {
-      fs.unlinkSync(localPath);
+    const ready = await waitForFileReady(localPath);
+    if (!ready) {
+      throw new Error('Archivo descargado no disponible para análisis');
     }
-  } catch (cleanupError) {
-    log.warn('No se pudo limpiar archivo temporal descargado:', cleanupError);
-  }
 
-  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-  const docType = normalizeDocumentType(fileMeta?.sourceRoot);
-  const analysisResult = await postWithRetry(getAnalyzeEndpoint(docType), {
-    text: ocrResult.text,
-    quality: ocrResult.quality,
-    sessionId: store.get('sessionId')
-  }).then(res => res.data);
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
+    const docType = normalizeDocumentType(fileMeta?.sourceRoot);
+    const analysisResult = await analyzeFileWithBackendIA(localPath, mimeType, fileName, docType);
 
-  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
 
-  // Sin envío de email: se eliminó notificación por JSON
+    // Sin envío de email: se eliminó notificación por JSON
 
-  try {
-    const rootName = fileMeta.sourceRoot || '';
-    if (rootName) {
-      const noComparado = await getOrCreateNoComparadoFolder(rootName);
-      await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '', fileName);
-      await postWithRetry(`${BACKEND_URL}/drive/move`, {
-        sessionId: store.get('sessionId'),
-        fileId: fileMeta.id,
-        addParents: [noComparado.id],
-        removeParents: fileMeta.noProcesadoId ? [fileMeta.noProcesadoId] : []
-      });
+    try {
+      const rootName = fileMeta.sourceRoot || '';
+      if (rootName) {
+        const noComparado = await getOrCreateNoComparadoFolder(rootName);
+        await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '', fileName);
+        await postWithRetry(`${BACKEND_URL}/drive/move`, {
+          sessionId: store.get('sessionId'),
+          fileId: fileMeta.id,
+          addParents: [noComparado.id],
+          removeParents: fileMeta.noProcesadoId ? [fileMeta.noProcesadoId] : []
+        });
+      }
+    } catch (moveError) {
+      log.warn('No se pudo mover archivo a No comparado:', moveError);
     }
-  } catch (moveError) {
-    log.warn('No se pudo mover archivo a No comparado:', moveError);
-  }
 
-  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
+  } finally {
+    try {
+      if (localPath && fs.existsSync(localPath)) {
+        fs.unlinkSync(localPath);
+      }
+    } catch (cleanupError) {
+      log.warn('No se pudo limpiar archivo temporal descargado:', cleanupError);
+    }
+  }
 }
 
 async function downloadDriveFileToTemp(fileMeta, fallbackName) {
