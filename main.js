@@ -10,7 +10,9 @@ const { spawn } = require('child_process');
 
 const WATCH_SUBFOLDERS = ['Albaranes', 'Facturas'];
 const WATCHED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.txt'];
+const BILLING_EMAIL_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg'];
 const EMAIL_RECIPIENT = 'bgoptimizing@gmail.com';
+const BILLING_POLL_INTERVAL_MS = 30000;
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
@@ -512,6 +514,8 @@ async function performLocalOCR(filePath, mimeType, originalName) {
 const store = new Store();
 let mainWindow;
 let bdWindow;
+let billingMonitorInterval = null;
+let billingMonitorRunning = false;
 let windowReadyResolve;
 const windowReadyPromise = new Promise((resolve) => {
   windowReadyResolve = resolve;
@@ -727,7 +731,7 @@ app.on('activate', () => {
 });
 
 // Iniciar proceso de login
-ipcMain.handle('google-login', async (event, isUser = false) => {
+ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary') => {
   try {
     // Obtener URL de autenticación del backend
     const response = await axios.get(`${BACKEND_URL}/auth/url`, {
@@ -736,19 +740,39 @@ ipcMain.handle('google-login', async (event, isUser = false) => {
     
     const { authUrl, sessionId } = response.data;
     
-    // Guardar sessionId
-    store.set('sessionId', sessionId);
+    // Guardar sessionId temporal según propósito
+    if (purpose === 'billing') {
+      store.set('billingSessionId', sessionId);
+    } else {
+      store.set('sessionId', sessionId);
+    }
     
     // Abrir navegador externo para login
     await shell.openExternal(authUrl);
     
     // Esperar a que el usuario complete el login (polling)
     const userData = await waitForAuth(sessionId);
-    persistInteractiveLogin({
-      sessionId,
-      refreshToken: userData?.refreshToken || null,
-      isUser: Boolean(isUser)
-    });
+
+    if (purpose === 'billing') {
+      store.set('billingMode', 'separate');
+      store.set('billingSessionId', sessionId);
+      store.set('billingEmail', userData?.email || null);
+      store.set('billingRefreshToken', userData?.refreshToken || null);
+      startBillingMonitor();
+    } else {
+      persistInteractiveLogin({
+        sessionId,
+        refreshToken: userData?.refreshToken || null,
+        isUser: Boolean(isUser)
+      });
+
+      const mode = store.get('billingMode');
+      if (mode === 'same') {
+        store.set('billingSessionId', sessionId);
+        store.set('billingEmail', userData?.email || null);
+      }
+      startBillingMonitor();
+    }
     return userData;
     
   } catch (error) {
@@ -1161,6 +1185,45 @@ ipcMain.handle('get-user-info', async () => {
   } catch (error) {
     return null;
   }
+});
+
+ipcMain.handle('get-billing-config', async () => {
+  const mode = store.get('billingMode') || null;
+  const email = store.get('billingEmail') || null;
+  const primarySessionId = store.get('sessionId');
+
+  if (!primarySessionId) {
+    return { configured: false, mode: null, email: null };
+  }
+
+  if (!mode || !email) {
+    return { configured: false, mode: null, email: null };
+  }
+
+  return { configured: true, mode, email };
+});
+
+ipcMain.handle('set-billing-email-same', async () => {
+  const primarySessionId = store.get('sessionId');
+  if (!primarySessionId) {
+    throw new Error('No hay sesión principal activa');
+  }
+
+  const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId: primarySessionId }, { retries: 1 });
+  const email = verifyResp?.data?.email || null;
+
+  store.set('billingMode', 'same');
+  store.set('billingSessionId', primarySessionId);
+  store.set('billingEmail', email);
+  store.delete('billingRefreshToken');
+  startBillingMonitor();
+
+  return { configured: true, mode: 'same', email };
+});
+
+ipcMain.handle('start-billing-monitor', async () => {
+  startBillingMonitor();
+  return { started: true };
 });
 
 ipcMain.handle('scan-no-procesado', async () => {
@@ -1804,7 +1867,240 @@ ipcMain.handle('logout', async () => {
   }
 
   store.clear();
+  stopBillingMonitor();
   clearAuthState();
   app.relaunch();
   app.quit();
 });
+
+async function ensureBillingSessionReady() {
+  const mode = store.get('billingMode');
+
+  if (!mode) return null;
+
+  if (mode === 'same') {
+    const primarySessionId = store.get('sessionId');
+    if (!primarySessionId) return null;
+    store.set('billingSessionId', primarySessionId);
+    return primarySessionId;
+  }
+
+  let billingSessionId = store.get('billingSessionId');
+  const billingRefreshToken = store.get('billingRefreshToken');
+
+  if (billingSessionId) {
+    try {
+      await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId: billingSessionId }, { retries: 1 });
+      return billingSessionId;
+    } catch (e) {
+      billingSessionId = null;
+    }
+  }
+
+  if (!billingRefreshToken) {
+    return null;
+  }
+
+  const silentResp = await postWithRetry(`${BACKEND_URL}/auth/silent-login`, {
+    refreshToken: billingRefreshToken,
+    isUser: false
+  }, { retries: 1 });
+
+  const newSessionId = silentResp?.data?.sessionId;
+  if (!newSessionId) return null;
+
+  store.set('billingSessionId', newSessionId);
+  store.set('billingEmail', silentResp?.data?.email || store.get('billingEmail') || null);
+  store.set('billingMode', 'separate');
+  store.set('billingRefreshToken', silentResp?.data?.refreshToken || billingRefreshToken);
+  return newSessionId;
+}
+
+async function listBillingInvoiceAttachments(sessionId) {
+  const response = await postWithRetry(`${BACKEND_URL}/gmail/invoice-attachments`, {
+    sessionId,
+    maxResults: 10
+  }, { timeout: 60000, retries: 1 });
+  return Array.isArray(response?.data?.attachments) ? response.data.attachments : [];
+}
+
+async function markBillingMessagesRead(sessionId, messageIds = []) {
+  if (!messageIds.length) return;
+  await postWithRetry(`${BACKEND_URL}/gmail/mark-read`, {
+    sessionId,
+    messageIds
+  }, { retries: 1 });
+}
+
+function attachmentToTempFile(attachment = {}) {
+  const ext = path.extname(attachment.filename || '').toLowerCase();
+  if (!BILLING_EMAIL_ALLOWED_EXTENSIONS.includes(ext)) {
+    throw new Error('Extensión no permitida para monitor de facturas');
+  }
+
+  const tempDir = path.join(app.getPath('temp'), 'billing-attachments');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const safeName = sanitizeFileName(attachment.filename || `adjunto${ext || '.pdf'}`) || `adjunto${ext || '.pdf'}`;
+  const fullPath = path.join(tempDir, `${Date.now()}-${safeName}`);
+  const buffer = Buffer.from(attachment.dataBase64 || '', 'base64');
+  fs.writeFileSync(fullPath, buffer);
+  return fullPath;
+}
+
+async function processBillingAttachmentAsFactura(attachment) {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('No hay sesión principal para procesar factura');
+  }
+
+  const standard = await ensureStandardFolders();
+  const facturasNoProcesadoId = standard?.facturas?.children?.['No procesado']?.id;
+  const facturasNoComparadoId = standard?.facturas?.children?.['No comparado']?.id;
+  const facturasDocumentosId = standard?.facturas?.children?.['Documentos']?.id;
+  if (!facturasNoProcesadoId || !facturasNoComparadoId) {
+    throw new Error('No se pudieron preparar carpetas Facturas');
+  }
+
+  const localPath = attachmentToTempFile(attachment);
+
+  try {
+    const uploaded = await uploadLocalFileToDrive(sessionId, localPath, facturasNoProcesadoId);
+    const analysisResult = await analyzeFileWithBackendIA(
+      localPath,
+      attachment?.mimeType || '',
+      attachment?.filename || path.basename(localPath),
+      'factura'
+    );
+
+    await uploadGeneratedTxtFiles(facturasNoComparadoId, analysisResult?.analysis || '', attachment?.filename || null);
+
+    const uploadedId = uploaded?.file?.id || uploaded?.fileId || uploaded?.id;
+    if (uploadedId) {
+      await postWithRetry(`${BACKEND_URL}/drive/move`, {
+        sessionId,
+        fileId: uploadedId,
+        addParents: [facturasNoComparadoId],
+        removeParents: [facturasNoProcesadoId]
+      });
+    }
+
+    const compareResult = await compareFacturaWithAlbaranes({
+      facturaAnalysisText: analysisResult?.analysis || '',
+      rootFolderName: 'Facturas'
+    });
+
+    if (facturasDocumentosId && uploadedId) {
+      const shouldMoveFactura = compareResult?.ok
+        || (compareResult?.matchedAlbaranes && compareResult.matchedAlbaranes.length > 0);
+
+      if (shouldMoveFactura) {
+        await postWithRetry(`${BACKEND_URL}/drive/move`, {
+          sessionId,
+          fileId: uploadedId,
+          addParents: [facturasDocumentosId],
+          removeParents: [facturasNoComparadoId]
+        });
+
+        const payload = buildTxtFilesFromAnalysis(analysisResult?.analysis || '', attachment?.filename || null);
+        if (payload?.files?.length) {
+          const txtContents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+            sessionId,
+            folderId: facturasNoComparadoId
+          });
+
+          const txtFiles = (txtContents?.data?.files || [])
+            .filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
+
+          for (const file of payload.files) {
+            const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
+            if (!match?.id) continue;
+            await postWithRetry(`${BACKEND_URL}/drive/move`, {
+              sessionId,
+              fileId: match.id,
+              addParents: [facturasDocumentosId],
+              removeParents: [facturasNoComparadoId]
+            });
+          }
+        }
+      }
+    }
+
+    if (compareResult && !compareResult.ok) {
+      await sendEmailNotification(
+        `Incongruencias en factura recibida por email: ${attachment?.filename || 'sin nombre'}`,
+        [
+          `Archivo: ${attachment?.filename || 'N/A'}`,
+          compareResult.message || 'Se encontraron incongruencias.',
+          '',
+          'Detalles:',
+          ...(compareResult.issues || []).map(issue => `- ${issue}`)
+        ].join('\n')
+      );
+    }
+  } finally {
+    try {
+      if (localPath && fs.existsSync(localPath)) fs.unlinkSync(localPath);
+    } catch (e) {}
+  }
+}
+
+async function runBillingMonitorCycle() {
+  if (billingMonitorRunning) return;
+  billingMonitorRunning = true;
+
+  try {
+    const primarySessionId = store.get('sessionId');
+    if (!primarySessionId) return;
+
+    const billingSessionId = await ensureBillingSessionReady();
+    if (!billingSessionId) return;
+
+    const attachments = await listBillingInvoiceAttachments(billingSessionId);
+    if (!attachments.length) return;
+
+    const grouped = new Map();
+    attachments.forEach(item => {
+      const key = item.messageId || `${Date.now()}-${Math.random()}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(item);
+    });
+
+    const messagesToMark = [];
+    for (const [messageId, items] of grouped.entries()) {
+      let ok = true;
+      for (const attachment of items) {
+        try {
+          await processBillingAttachmentAsFactura(attachment);
+        } catch (error) {
+          ok = false;
+          log.error('Error procesando adjunto de facturas por email:', error);
+        }
+      }
+      if (ok && messageId) messagesToMark.push(messageId);
+    }
+
+    if (messagesToMark.length) {
+      await markBillingMessagesRead(billingSessionId, messagesToMark);
+    }
+  } catch (error) {
+    log.error('Error en ciclo del monitor de facturas por email:', error);
+  } finally {
+    billingMonitorRunning = false;
+  }
+}
+
+function startBillingMonitor() {
+  if (billingMonitorInterval) return;
+  billingMonitorInterval = setInterval(() => {
+    runBillingMonitorCycle();
+  }, BILLING_POLL_INTERVAL_MS);
+  runBillingMonitorCycle();
+}
+
+function stopBillingMonitor() {
+  if (billingMonitorInterval) {
+    clearInterval(billingMonitorInterval);
+    billingMonitorInterval = null;
+  }
+  billingMonitorRunning = false;
+}

@@ -4,8 +4,14 @@ const path = require('path');
 
 // Elementos del DOM
 const loginSection = document.getElementById('login-section');
+const billingSetupSection = document.getElementById('billing-setup-section');
 const uploadSection = document.getElementById('upload-section');
 const loginBtn = document.getElementById('login-btn');
+const billingSameBtn = document.getElementById('billing-same-btn');
+const billingDifferentBtn = document.getElementById('billing-different-btn');
+const billingLoginBtn = document.getElementById('billing-login-btn');
+const billingQuestionText = document.getElementById('billing-question-text');
+const billingDifferentActions = document.getElementById('billing-different-actions');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
 const menuButtons = document.querySelectorAll('.menu-item');
@@ -224,14 +230,91 @@ async function checkSession() {
       showStatus('Error al verificar carpetas estándar en Drive.', 'error');
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
-    showUploadSection(info);
+    const billingConfig = await ipcRenderer.invoke('get-billing-config');
     toggleStartupOverlay(false);
-    await ipcRenderer.invoke('scan-no-procesado');
+    showBillingSetupSection(info, billingConfig);
   } else {
     loginSection.classList.add('active');
+    billingSetupSection.classList.remove('active');
     uploadSection.classList.remove('active');
     toggleStartupOverlay(false);
   }
+}
+
+function showBillingSetupSection(info, billingConfig) {
+  const primaryEmail = info?.email || '';
+  const selectedBillingEmail = billingConfig?.email || '';
+  const isConfigured = Boolean(billingConfig?.configured && selectedBillingEmail);
+
+  if (isConfigured) {
+    showUploadSection(info, selectedBillingEmail);
+    ipcRenderer.invoke('scan-no-procesado');
+    return;
+  }
+
+  loginSection.classList.remove('active');
+  uploadSection.classList.remove('active');
+  billingSetupSection.classList.add('active');
+  if (billingDifferentActions) billingDifferentActions.style.display = 'none';
+
+  if (billingQuestionText) {
+    billingQuestionText.textContent = `Las facturas llegan al mismo email que acabas de iniciar sesión? (${primaryEmail})`;
+  }
+}
+
+if (billingSameBtn) {
+  billingSameBtn.addEventListener('click', async () => {
+    try {
+      billingSameBtn.disabled = true;
+      billingDifferentBtn.disabled = true;
+      showStatus('Configurando email de facturas...', 'loading');
+      const config = await ipcRenderer.invoke('set-billing-email-same');
+      const info = await ipcRenderer.invoke('get-user-info');
+      if (!info?.email) {
+        throw new Error('No hay sesión principal activa');
+      }
+      showUploadSection(info, config?.email || info.email);
+      await ipcRenderer.invoke('scan-no-procesado');
+      showStatus('Email de facturas configurado.', 'success');
+    } catch (error) {
+      showStatus(`Error al configurar email de facturas: ${error.message || error}`, 'error');
+    } finally {
+      billingSameBtn.disabled = false;
+      billingDifferentBtn.disabled = false;
+    }
+  });
+}
+
+if (billingDifferentBtn) {
+  billingDifferentBtn.addEventListener('click', () => {
+    if (billingDifferentActions) {
+      billingDifferentActions.style.display = '';
+    }
+  });
+}
+
+if (billingLoginBtn) {
+  billingLoginBtn.addEventListener('click', async () => {
+    try {
+      billingLoginBtn.disabled = true;
+      billingLoginBtn.textContent = 'Abriendo navegador...';
+      showStatus('Inicia sesión en el email de facturas desde el navegador.', 'loading');
+      const billingInfo = await ipcRenderer.invoke('google-login', false, 'billing');
+      const info = await ipcRenderer.invoke('get-user-info');
+      if (!info?.email) {
+        throw new Error('No hay sesión principal activa');
+      }
+      const billingEmail = billingInfo?.email || '';
+      showUploadSection(info, billingEmail || info.email);
+      await ipcRenderer.invoke('scan-no-procesado');
+      showStatus('Email de facturas configurado con cuenta distinta.', 'success');
+    } catch (error) {
+      showStatus(`Error al iniciar sesión en email de facturas: ${error.message || error}`, 'error');
+    } finally {
+      billingLoginBtn.disabled = false;
+      billingLoginBtn.textContent = 'Iniciar sesión en email de facturas';
+    }
+  });
 }
 
 // Nota: el login se gestiona en user.html. Esta página solo muestra la UI principal.
@@ -950,10 +1033,16 @@ function renderBreadcrumbs() {
 }
 
 // When showing upload section initially, load root or session.folderId
-async function showUploadSection(info) {
+async function showUploadSection(info, billingEmail = null) {
   loginSection.classList.remove('active');
+  billingSetupSection.classList.remove('active');
   uploadSection.classList.add('active');
   document.getElementById('user-email').textContent = info.email;
+  const billingEmailEl = document.getElementById('billing-email');
+  if (billingEmailEl) {
+    billingEmailEl.textContent = billingEmail || info.email || 'Pendiente';
+    billingEmailEl.classList.remove('placeholder');
+  }
 
   // Load the full folder tree
   await loadFolderTree();
@@ -966,6 +1055,11 @@ async function showUploadSection(info) {
   await loadFolderContents(null, false, 'Mi unidad');
   // Refresh shared lists for the UI
   await refreshSharedLists();
+  await ipcRenderer.invoke('start-billing-monitor');
+}
+
+async function refreshSharedLists() {
+  return;
 }
 
 // Enlazar botones de menú lateral

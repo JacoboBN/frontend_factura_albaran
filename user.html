@@ -526,6 +526,23 @@
     </div>
 
     <!-- Upload Section with folder browser -->
+    <div class="section" id="billing-setup-section">
+      <div class="login-section">
+        <h2>Configuración de Email de facturas</h2>
+        <p id="billing-question-text" style="color:#666; max-width:640px;">
+          ¿Las facturas llegan al mismo email que acabas de iniciar sesión?
+        </p>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+          <button class="btn" id="billing-same-btn">Sí, usar este email</button>
+          <button class="btn btn-secondary" id="billing-different-btn">No, usar otro email</button>
+        </div>
+        <div id="billing-different-actions" style="display:none; margin-top:8px;">
+          <p style="color:#666; margin-bottom:10px;">Inicia sesión con el email que recibirá las facturas.</p>
+          <button class="btn" id="billing-login-btn">Iniciar sesión en email de facturas</button>
+        </div>
+      </div>
+    </div>
+
     <div class="section" id="upload-section">
       <div class="app">
         <aside class="sidebar">
