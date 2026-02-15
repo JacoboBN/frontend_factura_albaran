@@ -228,6 +228,7 @@
       setStatus('Excel cargado correctamente (solo lectura).', 'success');
     }
 
+    // Botón atrás: cerrar esta ventana secundaria sin recargar la principal
     const backBtn = document.getElementById('back-btn');
     if (backBtn) {
       backBtn.addEventListener('click', () => {
@@ -241,9 +242,10 @@
           return;
         }
 
-        window.location.href = 'user.html';
+        window.close();
       });
     }
+
 
     const openDriveBtn = document.getElementById('open-drive-btn');
     if (openDriveBtn) {

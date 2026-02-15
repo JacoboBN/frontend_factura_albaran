@@ -999,7 +999,7 @@ tileButtons.forEach(tile => {
       return;
     }
     if (action === 'bases-datos') {
-      window.location.href = 'bd.html';
+      await ipcRenderer.invoke('open-bd-window');
       return;
     }
 
