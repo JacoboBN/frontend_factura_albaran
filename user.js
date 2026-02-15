@@ -546,71 +546,71 @@ if (noProcesadoShareBtn) {
   });
 }
 
-// Refrescar listas de usuarios compartidos en la UI (admin y main)
-async function refreshSharedLists() {
-  try {
-    const info = await ipcRenderer.invoke('get-user-info');
-    const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
-    let sharedNoProcesado = [];
+// // Refrescar listas de usuarios compartidos en la UI (admin y main)
+// async function refreshSharedLists() {
+//   try {
+//     const info = await ipcRenderer.invoke('get-user-info');
+//     const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
+//     let sharedNoProcesado = [];
 
-    try {
-      const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
-      sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
-    } catch (e) {
-      console.warn('No se pudo leer permisos en vivo de No procesado:', e);
-      sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
-        ? info.sharedNoProcesadoEmails
-        : [];
-    }
+//     try {
+//       const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
+//       sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
+//     } catch (e) {
+//       console.warn('No se pudo leer permisos en vivo de No procesado:', e);
+//       sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
+//         ? info.sharedNoProcesadoEmails
+//         : [];
+//     }
 
-    const sharedEmailsList = document.getElementById('shared-emails-list');
-    if (sharedEmailsList) {
-      sharedEmailsList.innerHTML = '';
-      if (shared.length === 0) {
-        sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-      } else {
-        shared.forEach(email => {
-          const div = document.createElement('div');
-          div.className = 'shared-item';
-          div.innerHTML = `<span>${email}</span>`;
-          sharedEmailsList.appendChild(div);
-        });
-      }
-    }
+//     const sharedEmailsList = document.getElementById('shared-emails-list');
+//     if (sharedEmailsList) {
+//       sharedEmailsList.innerHTML = '';
+//       if (shared.length === 0) {
+//         sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+//       } else {
+//         shared.forEach(email => {
+//           const div = document.createElement('div');
+//           div.className = 'shared-item';
+//           div.innerHTML = `<span>${email}</span>`;
+//           sharedEmailsList.appendChild(div);
+//         });
+//       }
+//     }
 
-    const mainShared = document.getElementById('main-shared-list');
-    if (mainShared) {
-      mainShared.innerHTML = '';
-      if (shared.length === 0) {
-        mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-      } else {
-        shared.forEach(email => {
-          const div = document.createElement('div');
-          div.className = 'shared-item';
-          div.textContent = email;
-          mainShared.appendChild(div);
-        });
-      }
-    }
+//     const mainShared = document.getElementById('main-shared-list');
+//     if (mainShared) {
+//       mainShared.innerHTML = '';
+//       if (shared.length === 0) {
+//         mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+//       } else {
+//         shared.forEach(email => {
+//           const div = document.createElement('div');
+//           div.className = 'shared-item';
+//           div.textContent = email;
+//           mainShared.appendChild(div);
+//         });
+//       }
+//     }
 
-    const noProcesadoList = document.getElementById('no-procesado-shared-list');
-    if (noProcesadoList) {
-      noProcesadoList.innerHTML = '';
-      if (sharedNoProcesado.length === 0) {
-        noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-      } else {
-        sharedNoProcesado.forEach(email => {
-          const div = document.createElement('div');
-          div.className = 'shared-item';
-          div.textContent = email;
-          noProcesadoList.appendChild(div);
-        });
-      }
-    }
-  } catch (e) {
-    console.error('Error refrescando shared lists:', e);
-  }
-}
+//     const noProcesadoList = document.getElementById('no-procesado-shared-list');
+//     if (noProcesadoList) {
+//       noProcesadoList.innerHTML = '';
+//       if (sharedNoProcesado.length === 0) {
+//         noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+//       } else {
+//         sharedNoProcesado.forEach(email => {
+//           const div = document.createElement('div');
+//           div.className = 'shared-item';
+//           div.textContent = email;
+//           noProcesadoList.appendChild(div);
+//         });
+//       }
+//     }
+//   } catch (e) {
+//     console.error('Error refrescando shared lists:', e);
+//   }
+// }
 
 // Navegación de carpetas y listado de archivos (mejorado)
 let currentFolderId = null;
@@ -999,12 +999,10 @@ tileButtons.forEach(tile => {
       return;
     }
     if (action === 'bases-datos') {
-      const bdWindow = window.open('bd.html', '_blank', 'width=1200,height=800');
-      if (!bdWindow) {
-        window.location.href = 'bd.html';
-      }
+      window.location.href = 'bd.html';
       return;
     }
+
     if (action === 'facturas') {
       await navigateToFolderByName('Facturas', true);
       return;

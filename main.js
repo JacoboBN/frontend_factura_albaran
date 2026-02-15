@@ -511,6 +511,7 @@ async function performLocalOCR(filePath, mimeType, originalName) {
 
 const store = new Store();
 let mainWindow;
+let bdWindow;
 let windowReadyResolve;
 const windowReadyPromise = new Promise((resolve) => {
   windowReadyResolve = resolve;
@@ -647,6 +648,29 @@ function createWindow() {
     if (windowReadyResolve) {
       windowReadyResolve();
     }
+  });
+}
+
+function openBdWindow() {
+  if (bdWindow && !bdWindow.isDestroyed()) {
+    bdWindow.focus();
+    return;
+  }
+
+  bdWindow = new BrowserWindow({
+    width: 1280,
+    height: 850,
+    parent: mainWindow,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    },
+    icon: path.join(__dirname, 'assets/icon.png')
+  });
+
+  bdWindow.loadFile('bd.html');
+  bdWindow.on('closed', () => {
+    bdWindow = null;
   });
 }
 
@@ -922,6 +946,11 @@ ipcMain.handle('open-external', async (event, url) => {
   }
 });
 
+ipcMain.handle('open-bd-window', async () => {
+  openBdWindow();
+  return { success: true };
+});
+
 // Crear carpeta en Drive
 ipcMain.handle('create-folder', async (event, name, parentId = null) => {
   const sessionId = store.get('sessionId');
@@ -969,6 +998,62 @@ ipcMain.handle('get-drive-database-sql', async () => {
   }
 
   return { sqlText, fileName: dbFile.name, fileId: dbFile.id };
+});
+
+// Obtener Excel de proveedores desde Mi unidad/Base de datos (o Bases de datos)
+ipcMain.handle('get-drive-proveedores-excel', async () => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para cargar el Excel');
+  }
+
+  const normalize = (value = '') => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  const rootContents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId,
+    folderId: 'root'
+  });
+
+  const rootFolders = (rootContents.data?.files || [])
+    .filter(item => item.mimeType === 'application/vnd.google-apps.folder');
+
+  const targetFolders = ['base de datos', 'bases de datos'];
+  const basesFolder = rootFolders.find(folder => targetFolders.includes(normalize(folder.name || '')));
+  if (!basesFolder) {
+    throw new Error('No se encontró la carpeta "Base de datos" en Mi unidad');
+  }
+
+  const basesContents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId,
+    folderId: basesFolder.id
+  });
+
+  const files = (basesContents.data?.files || [])
+    .filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
+
+  const excelFile = files.find(item => normalize(item.name || '') === normalize('CORREGIDO_Maestro Proveedores.xlsx'));
+  if (!excelFile) {
+    throw new Error('No se encontró el archivo CORREGIDO_Maestro Proveedores.xlsx');
+  }
+
+  const downloadResponse = await postWithRetry(
+    `${BACKEND_URL}/drive/download`,
+    { sessionId, fileId: excelFile.id },
+    { timeout: 60000, axiosOptions: { responseType: 'arraybuffer' } }
+  );
+
+  const dataBase64 = Buffer.from(downloadResponse.data).toString('base64');
+  return {
+    fileName: excelFile.name,
+    fileId: excelFile.id,
+    mimeType: excelFile.mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    dataBase64
+  };
 });
 
 // Elegir carpeta para un archivo usando diálogos nativos (evita prompt())

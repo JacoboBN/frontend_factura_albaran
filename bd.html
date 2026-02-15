@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ver BD</title>
+  <title>Bases de datos - Proveedores</title>
   <style>
     * {
       margin: 0;
@@ -21,51 +21,89 @@
     .container {
       background: white;
       border: 1px solid #ccc;
-      max-width: 1200px;
+      max-width: 1280px;
       width: 100%;
       margin: 0 auto;
       padding: 20px;
+      border-radius: 10px;
     }
 
     .header {
-      text-align: center;
-      margin-bottom: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
     }
 
     .header h1 {
       color: #333;
-      margin-bottom: 10px;
+      margin-bottom: 6px;
     }
 
-    .section {
-      margin-bottom: 40px;
+    .subtitle {
+      color: #666;
+      font-size: 14px;
     }
 
-    .section h2 {
-      margin-bottom: 20px;
-      color: #333;
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
-    .table-container {
-      overflow-x: auto;
+    .viewer-wrap {
+      border: 1px solid #d3d3d3;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fafafa;
+      min-height: 70vh;
+      padding: 12px;
+    }
+
+    .sheet-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .sheet-tab {
       border: 1px solid #ccc;
+      background: #f5f5f5;
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 13px;
     }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 800px;
+    .sheet-tab.active {
+      background: #007bff;
+      border-color: #007bff;
+      color: #fff;
     }
 
-    th, td {
-      border: 1px solid #ccc;
+    .sheet-content {
+      overflow: auto;
+      max-height: calc(70vh - 30px);
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
       padding: 10px;
-      text-align: left;
     }
 
-    th {
-      background: #f8f9fa;
-      font-weight: bold;
+    .sheet-content table {
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .sheet-content td,
+    .sheet-content th {
+      border: 1px solid #d5d5d5;
+      padding: 4px 6px;
+      white-space: nowrap;
     }
 
     .btn {
@@ -75,296 +113,154 @@
       padding: 10px 20px;
       font-size: 14px;
       cursor: pointer;
-      margin: 10px 0;
-    }
-
-    .back-btn {
-      display: block;
+      border-radius: 8px;
       text-decoration: none;
-      width: fit-content;
     }
 
-    .error-yes {
-      background-color: #ffebee;
-      color: #c62828;
-      font-weight: bold;
+    .btn-secondary {
+      background: #6c757d;
     }
 
-    .error-no {
-      background-color: #e8f5e9;
-      color: #2e7d32;
+    .status {
+      margin: 12px 0;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
     }
 
-    .status-si {
-      color: #2e7d32;
-      font-weight: bold;
+    .status.loading {
+      display: block;
+      background: #d1ecf1;
+      color: #0c5460;
     }
 
-    .status-no {
-      color: #c62828;
-      font-weight: bold;
+    .status.error {
+      display: block;
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .status.success {
+      display: block;
+      background: #d4edda;
+      color: #155724;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>Ver BD</h1>
-      <a href="user.html" class="btn back-btn" id="back-btn">Volver</a>
-    </div>
-
-    <!-- PROVEEDORES -->
-    <div class="section">
-      <h2>BD Proveedores</h2>
-      <div class="table-container">
-        <table id="proveedores-table">
-          <thead>
-            <tr>
-              <th>CIF</th>
-              <th>Nombre</th>
-              <th>RSA</th>
-              <th>IBAN</th>
-              <th>Dirección</th>
-              <th>Nº Errores</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+      <div>
+        <h1>Bases de datos</h1>
+        <div class="subtitle">Archivo: CORREGIDO_Maestro Proveedores.xlsx</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="back-btn">Volver</button>
+        <button class="btn" id="open-drive-btn">Abrir en Drive</button>
       </div>
     </div>
 
-    <!-- CENTROS -->
-    <div class="section">
-      <h2>BD Centros</h2>
-      <div class="table-container">
-        <table id="centros-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Nombre</th>
-              <th>Dirección</th>
-              <th>Nº errores</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
+    <div id="status" class="status loading">Buscando el Excel en Drive...</div>
 
-    <!-- ALBARANES ELEMENTOS -->
-    <div class="section">
-      <h2>Albaranes Elementos</h2>
-      <div class="table-container">
-        <table id="albaranes-elementos-table">
-          <thead>
-            <tr>
-              <th>CIF Proveedor</th>
-              <th>Nº albarán</th>
-              <th>Fecha</th>
-              <th>Recibidor</th>
-              <th>Artículo</th>
-              <th>País</th>
-              <th>Bultos</th>
-              <th>Kg</th>
-              <th>Precio</th>
-              <th>Importe total</th>
-              <th>Comprobado</th>
-              <th>Fallo</th>
-              <th>Arreglado</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- FACTURAS ELEMENTOS -->
-    <div class="section">
-      <h2>Facturas Elementos</h2>
-      <div class="table-container">
-        <table id="facturas-elementos-table">
-          <thead>
-            <tr>
-              <th>CIF Proveedor</th>
-              <th>Nº factura</th>
-              <th>Fecha</th>
-              <th>Recibidor</th>
-              <th>Artículo</th>
-              <th>País</th>
-              <th>Bultos</th>
-              <th>Kg</th>
-              <th>Precio</th>
-              <th>Importe total</th>
-              <th>Nº albarán</th>
-              <th>Fecha albarán</th>
-              <th>Comprobado</th>
-              <th>Fallo</th>
-              <th>Arreglado</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- ALBARÁN TOTAL -->
-    <div class="section">
-      <h2>Albarán Total</h2>
-      <div class="table-container">
-        <table id="albaran-total-table">
-          <thead>
-            <tr>
-              <th>Nº</th>
-              <th>Fecha</th>
-              <th>Total sin IVA</th>
-              <th>% IVA</th>
-              <th>IVA</th>
-              <th>Total</th>
-              <th>Error</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- FACTURA TOTAL -->
-    <div class="section">
-      <h2>Factura Total</h2>
-      <div class="table-container">
-        <table id="factura-total-table">
-          <thead>
-            <tr>
-              <th>Nº</th>
-              <th>Fecha</th>
-              <th>Total sin IVA</th>
-              <th>% IVA</th>
-              <th>IVA</th>
-              <th>Total</th>
-              <th>Multialbarán</th>
-              <th>Nº Albarán</th>
-              <th>Error</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+    <div class="viewer-wrap">
+      <div style="width:100%;">
+        <div id="sheet-tabs" class="sheet-tabs"></div>
+        <div id="sheet-content" class="sheet-content">Cargando...</div>
       </div>
     </div>
 
   <script>
-    // Datos ficticios para proveedores
-    const proveedoresData = [
-      { cif: 'A12345678', nombre: 'Frutas García S.L.', rsa: 'García Distribución', iban: 'ES79 2100 0813 4012 3456 7891', direccion: 'C/ Comercio 45, Madrid', errores: 0 },
-      { cif: 'B23456789', nombre: 'Verduras del Campo S.A.', rsa: 'Verduras Campo', iban: 'ES91 2100 0418 4502 3456 7892', direccion: 'Pol. Ind. Norte, Murcia', errores: 2 },
-      { cif: 'C34567890', nombre: 'Importaciones Martínez', rsa: 'Martínez Import', iban: 'ES12 2100 0813 4512 3456 7893', direccion: 'Avda. Principal 128, Valencia', errores: 1 },
-      { cif: 'D45678901', nombre: 'Hortalizas Premium S.L.', rsa: 'Premium Hortalizas', iban: 'ES34 2100 0813 4512 3456 7894', direccion: 'C/ Mayor 67, Almería', errores: 0 },
-      { cif: 'E56789012', nombre: 'Distribuciones López', rsa: 'López Distribución', iban: 'ES56 2100 0813 4512 3456 7895', direccion: 'Pol. Ind. Sur, Sevilla', errores: 3 }
-    ];
+    const { ipcRenderer } = require('electron');
+    const XLSX = require('xlsx');
+    let driveUrl = '';
 
-    // Datos ficticios para centros
-    const centrosData = [
-      { id: 'C001', nombre: 'Centro Logístico Madrid Norte', direccion: 'Pol. Ind. Las Mercedes, Madrid', errores: 1 },
-      { id: 'C002', nombre: 'Centro Distribución Valencia', direccion: 'C/ Industria 89, Valencia', errores: 0 },
-      { id: 'C003', nombre: 'Almacén Murcia', direccion: 'Avda. Europa 234, Murcia', errores: 2 },
-      { id: 'C004', nombre: 'Hub Barcelona', direccion: 'Pol. Ind. Zona Franca, Barcelona', errores: 0 }
-    ];
+    function setStatus(message, type = 'loading') {
+      const el = document.getElementById('status');
+      if (!el) return;
+      el.textContent = message;
+      el.className = `status ${type}`;
+    }
 
-    // Datos ficticios para albaranes elementos
-    const albaranesElementosData = [
-      { cif: 'A12345678', num_albaran: 'ALB-2024-001', fecha: '15/01/2024', recibidor: 'C001', articulo: 'Tomates', pais: 'España', bultos: 50, kg: 1250, precio: '1.80€/kg', importe: '2.250,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
-      { cif: 'B23456789', num_albaran: 'ALB-2024-002', fecha: '16/01/2024', recibidor: 'C002', articulo: 'Lechugas', pais: 'España', bultos: 30, kg: 450, precio: '2.40€/kg', importe: '1.080,00€', comprobado: 'Sí', fallo: 'Sí', arreglado: 'Sí' },
-      { cif: 'C34567890', num_albaran: 'ALB-2024-003', fecha: '17/01/2024', recibidor: 'C001', articulo: 'Aguacates', pais: 'Perú', bultos: 40, kg: 800, precio: '4.50€/kg', importe: '3.600,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
-      { cif: 'A12345678', num_albaran: 'ALB-2024-004', fecha: '18/01/2024', recibidor: 'C003', articulo: 'Pimientos', pais: 'España', bultos: 25, kg: 625, precio: '2.20€/kg', importe: '1.375,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
-      { cif: 'D45678901', num_albaran: 'ALB-2024-005', fecha: '19/01/2024', recibidor: 'C004', articulo: 'Calabacines', pais: 'España', bultos: 35, kg: 875, precio: '1.60€/kg', importe: '1.400,00€', comprobado: 'No', fallo: 'Sí', arreglado: 'No' },
-      { cif: 'B23456789', num_albaran: 'ALB-2024-006', fecha: '20/01/2024', recibidor: 'C001', articulo: 'Zanahorias', pais: 'España', bultos: 60, kg: 1500, precio: '0.95€/kg', importe: '1.425,00€', comprobado: 'Sí', fallo: 'No', arreglado: '-' }
-    ];
+    function renderWorkbook(workbook) {
+      const tabsEl = document.getElementById('sheet-tabs');
+      const contentEl = document.getElementById('sheet-content');
+      const sheetNames = workbook?.SheetNames || [];
 
-    // Datos ficticios para facturas elementos
-    const facturasElementosData = [
-      { cif: 'A12345678', num_factura: 'F-2024-0015', fecha: '22/01/2024', recibidor: 'C001', articulo: 'Tomates', pais: 'España', bultos: 50, kg: 1250, precio: '1.80€/kg', importe: '2.250,00€', num_albaran: 'ALB-2024-001', fecha_albaran: '15/01/2024', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
-      { cif: 'B23456789', num_factura: 'F-2024-0016', fecha: '23/01/2024', recibidor: 'C002', articulo: 'Lechugas', pais: 'España', bultos: 30, kg: 450, precio: '2.40€/kg', importe: '1.080,00€', num_albaran: 'ALB-2024-002', fecha_albaran: '16/01/2024', comprobado: 'Sí', fallo: 'Sí', arreglado: 'Sí' },
-      { cif: 'C34567890', num_factura: 'F-2024-0017', fecha: '24/01/2024', recibidor: 'C001', articulo: 'Aguacates', pais: 'Perú', bultos: 40, kg: 800, precio: '4.50€/kg', importe: '3.600,00€', num_albaran: 'ALB-2024-003', fecha_albaran: '17/01/2024', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
-      { cif: 'A12345678', num_factura: 'F-2024-0018', fecha: '25/01/2024', recibidor: 'C003', articulo: 'Pimientos', pais: 'España', bultos: 25, kg: 625, precio: '2.20€/kg', importe: '1.375,00€', num_albaran: 'ALB-2024-004', fecha_albaran: '18/01/2024', comprobado: 'Sí', fallo: 'No', arreglado: '-' },
-      { cif: 'D45678901', num_factura: 'F-2024-0019', fecha: '26/01/2024', recibidor: 'C004', articulo: 'Calabacines', pais: 'España', bultos: 35, kg: 875, precio: '1.60€/kg', importe: '1.400,00€', num_albaran: 'ALB-2024-005', fecha_albaran: '19/01/2024', comprobado: 'Sí', fallo: 'Sí', arreglado: 'No' }
-    ];
+      if (!sheetNames.length) {
+        contentEl.innerHTML = '<p>No hay hojas para mostrar.</p>';
+        return;
+      }
 
-    // Datos ficticios para albarán total
-    const albaranTotalData = [
-      { num: 'ALB-2024-001', fecha: '15/01/2024', total_sin_iva: '2.250,00€', iva_porcentaje: '10%', iva: '225,00€', total: '2.475,00€', error: 'No' },
-      { num: 'ALB-2024-002', fecha: '16/01/2024', total_sin_iva: '1.080,00€', iva_porcentaje: '10%', iva: '108,00€', total: '1.188,00€', error: 'Sí' },
-      { num: 'ALB-2024-003', fecha: '17/01/2024', total_sin_iva: '3.600,00€', iva_porcentaje: '10%', iva: '360,00€', total: '3.960,00€', error: 'No' },
-      { num: 'ALB-2024-004', fecha: '18/01/2024', total_sin_iva: '1.375,00€', iva_porcentaje: '10%', iva: '137,50€', total: '1.512,50€', error: 'No' },
-      { num: 'ALB-2024-005', fecha: '19/01/2024', total_sin_iva: '1.400,00€', iva_porcentaje: '10%', iva: '140,00€', total: '1.540,00€', error: 'Sí' },
-      { num: 'ALB-2024-006', fecha: '20/01/2024', total_sin_iva: '1.425,00€', iva_porcentaje: '10%', iva: '142,50€', total: '1.567,50€', error: 'No' }
-    ];
+      const showSheet = (name) => {
+        const sheet = workbook.Sheets[name];
+        contentEl.innerHTML = XLSX.utils.sheet_to_html(sheet, { editable: false });
+        Array.from(tabsEl.querySelectorAll('.sheet-tab')).forEach(tab => {
+          tab.classList.toggle('active', tab.dataset.sheet === name);
+        });
+      };
 
-    // Datos ficticios para factura total
-    const facturaTotalData = [
-      { num: 'F-2024-0015', fecha: '22/01/2024', total_sin_iva: '2.250,00€', iva_porcentaje: '10%', iva: '225,00€', total: '2.475,00€', multialbaran: 'No', num_albaran: 'ALB-2024-001', error: 'No' },
-      { num: 'F-2024-0016', fecha: '23/01/2024', total_sin_iva: '1.080,00€', iva_porcentaje: '10%', iva: '108,00€', total: '1.188,00€', multialbaran: 'No', num_albaran: 'ALB-2024-002', error: 'Sí' },
-      { num: 'F-2024-0017', fecha: '24/01/2024', total_sin_iva: '3.600,00€', iva_porcentaje: '10%', iva: '360,00€', total: '3.960,00€', multialbaran: 'No', num_albaran: 'ALB-2024-003', error: 'No' },
-      { num: 'F-2024-0018', fecha: '25/01/2024', total_sin_iva: '1.375,00€', iva_porcentaje: '10%', iva: '137,50€', total: '1.512,50€', multialbaran: 'No', num_albaran: 'ALB-2024-004', error: 'No' },
-      { num: 'F-2024-0019', fecha: '26/01/2024', total_sin_iva: '1.400,00€', iva_porcentaje: '10%', iva: '140,00€', total: '1.540,00€', multialbaran: 'No', num_albaran: 'ALB-2024-005', error: 'Sí' },
-      { num: 'F-2024-0020', fecha: '27/01/2024', total_sin_iva: '5.175,00€', iva_porcentaje: '10%', iva: '517,50€', total: '5.692,50€', multialbaran: 'Sí', num_albaran: 'ALB-2024-004, ALB-2024-006', error: 'No' }
-    ];
+      tabsEl.innerHTML = '';
+      sheetNames.forEach((name, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'sheet-tab';
+        btn.textContent = name;
+        btn.dataset.sheet = name;
+        btn.addEventListener('click', () => showSheet(name));
+        tabsEl.appendChild(btn);
+        if (idx === 0) showSheet(name);
+      });
+    }
+
+    async function loadExcelFromDrive() {
+      setStatus('Buscando el Excel en Drive...', 'loading');
+
+      const excel = await ipcRenderer.invoke('get-drive-proveedores-excel');
+      driveUrl = `https://drive.google.com/file/d/${excel.fileId}/view`;
+
+      const binaryString = atob(excel.dataBase64 || '');
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+
+      const workbook = XLSX.read(bytes, { type: 'array' });
+      renderWorkbook(workbook);
+      setStatus('Excel cargado correctamente (solo lectura).', 'success');
+    }
 
     const backBtn = document.getElementById('back-btn');
     if (backBtn) {
-      backBtn.addEventListener('click', (event) => {
+      backBtn.addEventListener('click', () => {
         if (window.opener) {
-          event.preventDefault();
           window.close();
           return;
         }
 
         if (window.history.length > 1) {
-          event.preventDefault();
           window.history.back();
+          return;
         }
+
+        window.location.href = 'user.html';
       });
     }
 
-    function populateTable(tableId, data) {
-      const tbody = document.querySelector(`#${tableId} tbody`);
-      tbody.innerHTML = '';
-      
-      data.forEach(row => {
-        const tr = document.createElement('tr');
-        Object.entries(row).forEach(([key, value]) => {
-          const td = document.createElement('td');
-          
-          // Añadir clases CSS basadas en el valor
-          if (key === 'error' || key === 'fallo') {
-            if (value === 'Sí' || value === 'Si') {
-              td.classList.add('error-yes');
-            } else if (value === 'No') {
-              td.classList.add('error-no');
-            }
-          }
-          
-          if (key === 'comprobado' || key === 'arreglado') {
-            if (value === 'Sí' || value === 'Si') {
-              td.classList.add('status-si');
-            } else if (value === 'No') {
-              td.classList.add('status-no');
-            }
-          }
-          
-          td.textContent = value;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
+    const openDriveBtn = document.getElementById('open-drive-btn');
+    if (openDriveBtn) {
+      openDriveBtn.addEventListener('click', async () => {
+        if (!driveUrl) {
+          setStatus('Aún no se ha cargado el enlace del archivo.', 'error');
+          return;
+        }
+        await ipcRenderer.invoke('open-external', driveUrl);
       });
     }
 
-    // Cargar todos los datos cuando la página carga
     window.addEventListener('DOMContentLoaded', () => {
-      populateTable('proveedores-table', proveedoresData);
-      populateTable('centros-table', centrosData);
-      populateTable('albaranes-elementos-table', albaranesElementosData);
-      populateTable('facturas-elementos-table', facturasElementosData);
-      populateTable('albaran-total-table', albaranTotalData);
-      populateTable('factura-total-table', facturaTotalData);
+      loadExcelFromDrive().catch((error) => {
+        console.error(error);
+        setStatus(error.message || 'No se pudo cargar el Excel.', 'error');
+      });
     });
   </script>
 </body>
