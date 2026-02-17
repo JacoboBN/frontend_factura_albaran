@@ -24,6 +24,8 @@ const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
 const DEFAULT_TIMEOUT_MS = 20000;
 const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
+const DEFAULT_RETRY_BASE_DELAY_MS = 800;
+const DEFAULT_RETRY_MAX_DELAY_MS = 15000;
 const LOCAL_LOGIN_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 días desde login
 const LOCAL_INACTIVITY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días sin abrir app
 
@@ -36,6 +38,8 @@ const LEGACY_ANALYZE_TEXT_ENDPOINTS = {
   albaran: '/analyze/document/albaran',
   factura: '/analyze/document/factura'
 };
+
+let batchAnalyzeEndpointUnavailable = false;
 
 function normalizeDocumentType(value) {
   const normalized = (value || '').toString().toLowerCase();
@@ -330,31 +334,189 @@ function sleep(ms) {
 function isRetryableError(error) {
   const code = error?.code || '';
   const status = error?.response?.status;
+  const responseData = error?.response?.data;
+  const responseText = typeof responseData === 'string'
+    ? responseData
+    : JSON.stringify(responseData || {});
+  const isRateLimit403 = status === 403 && /rate.?limit|quota|userRateLimitExceeded|rateLimitExceeded/i.test(responseText);
+
   return (
     code === 'ECONNRESET' ||
     code === 'ECONNABORTED' ||
     code === 'ETIMEDOUT' ||
+    status === 408 ||
+    status === 429 ||
+    isRateLimit403 ||
     (status && status >= 500)
   );
 }
 
 async function postWithRetry(url, data, options = {}) {
   const retries = options.retries ?? 3;
-  const delayMs = options.delayMs ?? 3000;
+  const delayMs = options.delayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? DEFAULT_RETRY_MAX_DELAY_MS;
+  const backoffFactor = options.backoffFactor ?? 2;
+  const jitter = options.jitter ?? true;
   const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
   const axiosOptions = options.axiosOptions || {};
 
-  let attempt = 0;
-  while (attempt <= retries) {
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       return await axios.post(url, data, { timeout, ...axiosOptions });
     } catch (error) {
       if (attempt >= retries || !isRetryableError(error)) {
         throw error;
       }
-      await sleep(delayMs);
-      attempt += 1;
+
+      const expDelay = Math.min(delayMs * Math.pow(backoffFactor, attempt), maxDelayMs);
+      const finalDelay = jitter
+        ? Math.floor(expDelay * (0.75 + Math.random() * 0.5))
+        : expDelay;
+      await sleep(finalDelay);
     }
+  }
+}
+
+async function moveDriveFileWithBackoff(fileId, addParents = [], removeParents = []) {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para mover archivo');
+  }
+  if (!fileId) {
+    throw new Error('fileId requerido para mover archivo');
+  }
+
+  const addList = Array.isArray(addParents) ? addParents.filter(Boolean) : (addParents ? [addParents] : []);
+  const removeList = Array.isArray(removeParents) ? removeParents.filter(Boolean) : (removeParents ? [removeParents] : []);
+
+  const response = await postWithRetry(`${BACKEND_URL}/drive/move`, {
+    sessionId,
+    fileId,
+    addParents: addList,
+    removeParents: removeList
+  }, {
+    retries: 5,
+    delayMs: 700,
+    maxDelayMs: 10000,
+    backoffFactor: 2,
+    jitter: true,
+    timeout: 60000
+  });
+
+  return response.data;
+}
+
+async function moveDriveFilesWithBackoff(moves = [], options = {}) {
+  const list = Array.isArray(moves) ? moves.filter(Boolean) : [];
+  const concurrency = Math.max(1, Number(options.concurrency) || 2);
+  if (!list.length) return [];
+
+  const results = new Array(list.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= list.length) break;
+      const move = list[current] || {};
+      results[current] = await moveDriveFileWithBackoff(move.fileId, move.addParents || [], move.removeParents || []);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, list.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    throw new Error('Sesión requerida para analizar documentos');
+  }
+
+  const validItems = (Array.isArray(items) ? items : []).filter(item => item?.filePath);
+  if (!validItems.length) return [];
+
+  if (validItems.length === 1) {
+    const one = validItems[0];
+    const single = await analyzeFileWithBackendIA(one.filePath, one.mimeType || '', one.originalName || '', docType);
+    return [{ success: true, analysis: single?.analysis || '', raw: single }];
+  }
+
+  // Si ya detectamos que el backend desplegado no expone el endpoint batch,
+  // evitamos volver a intentarlo para no generar ruido ni latencia extra.
+  if (batchAnalyzeEndpointUnavailable) {
+    const fallbackResults = [];
+    for (const item of validItems) {
+      try {
+        const single = await analyzeFileWithBackendIA(item.filePath, item.mimeType || '', item.originalName || '', docType);
+        fallbackResults.push({ success: true, analysis: single?.analysis || '', raw: single });
+      } catch (error) {
+        fallbackResults.push({ success: false, analysis: '', error: error.message || String(error) });
+      }
+    }
+    return fallbackResults;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('sessionId', sessionId);
+    formData.append('docType', normalizeDocumentType(docType));
+
+    validItems.forEach((item) => {
+      formData.append('files', fs.createReadStream(item.filePath), {
+        filename: item.originalName || path.basename(item.filePath),
+        contentType: item.mimeType || undefined
+      });
+    });
+
+    const response = await postWithRetry(`${BACKEND_URL}/analyze/documents/batch/file`, formData, {
+      timeout: 240000,
+      retries: 2,
+      delayMs: 1200,
+      maxDelayMs: 12000,
+      backoffFactor: 2,
+      axiosOptions: {
+        headers: {
+          ...formData.getHeaders()
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      }
+    });
+
+    const results = Array.isArray(response?.data?.results) ? response.data.results : [];
+    if (!results.length) {
+      throw new Error('Batch IA sin resultados');
+    }
+
+    return validItems.map((item, idx) => {
+      const fromApi = results.find(r => Number(r?.index) === idx) || results[idx] || {};
+      return {
+        success: Boolean(fromApi?.success !== false),
+        analysis: fromApi?.analysis || '',
+        raw: fromApi
+      };
+    });
+  } catch (batchError) {
+    const status = batchError?.response?.status;
+    if (status === 404 || status === 405) {
+      batchAnalyzeEndpointUnavailable = true;
+      log.info('Endpoint batch IA no disponible en backend actual; usando fallback individual.');
+    } else {
+      log.warn('Batch IA falló; usando fallback individual:', batchError?.message || batchError);
+    }
+    const fallbackResults = [];
+    for (const item of validItems) {
+      try {
+        const single = await analyzeFileWithBackendIA(item.filePath, item.mimeType || '', item.originalName || '', docType);
+        fallbackResults.push({ success: true, analysis: single?.analysis || '', raw: single });
+      } catch (error) {
+        fallbackResults.push({ success: false, analysis: '', error: error.message || String(error) });
+      }
+    }
+    return fallbackResults;
   }
 }
 
@@ -1301,6 +1463,15 @@ ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalNa
   }
 });
 
+ipcMain.handle('analyze-files-batch', async (event, items = [], docType = 'albaran') => {
+  try {
+    return await analyzeFilesWithBackendIABatch(items, docType);
+  } catch (error) {
+    console.error('Error analizando archivos en batch con IA:', error);
+    throw new Error(error.response?.data?.error || error.message || 'Error al analizar documentos en batch con IA');
+  }
+});
+
 ipcMain.handle('ocr-document', async (event, filePath, mimeType, originalName) => {
   try {
     return await performLocalOCR(filePath, mimeType, originalName);
@@ -1373,13 +1544,7 @@ ipcMain.handle('move-file', async (event, fileId, addParents = [], removeParents
   const removeList = Array.isArray(removeParents) ? removeParents : (removeParents ? [removeParents] : []);
 
   try {
-    const response = await postWithRetry(`${BACKEND_URL}/drive/move`, {
-      sessionId,
-      fileId,
-      addParents: addList,
-      removeParents: removeList
-    });
-    return response.data;
+    return await moveDriveFileWithBackoff(fileId, addList, removeList);
   } catch (error) {
     console.error('Error moviendo archivo:', error);
     throw new Error(error.response?.data?.error || 'Error al mover archivo');
@@ -1409,13 +1574,23 @@ async function waitForWindowReady() {
   }
 }
 
-async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
+async function processNoProcesadoFileWithEvents(fileMeta, queueId, options = {}) {
   const fileName = fileMeta.name || 'Archivo';
+  const shouldEmitInit = options.emitQueueInit !== false;
 
-  emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
-  emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
+  if (shouldEmitInit) {
+    emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
+  }
 
-  const { localPath, mimeType } = await downloadDriveFileToTemp(fileMeta, fileName);
+  let localPath = options.localPath || null;
+  let mimeType = options.mimeType || '';
+
+  if (!localPath) {
+    const downloaded = await downloadDriveFileToTemp(fileMeta, fileName);
+    localPath = downloaded.localPath;
+    mimeType = downloaded.mimeType;
+  }
 
   try {
     const ready = await waitForFileReady(localPath);
@@ -1423,9 +1598,12 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
       throw new Error('Archivo descargado no disponible para análisis');
     }
 
-    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-    const docType = normalizeDocumentType(fileMeta?.sourceRoot);
-    const analysisResult = await analyzeFileWithBackendIA(localPath, mimeType, fileName, docType);
+    let analysisResult = options.analysisResult || null;
+    if (!analysisResult) {
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
+      const docType = normalizeDocumentType(fileMeta?.sourceRoot);
+      analysisResult = await analyzeFileWithBackendIA(localPath, mimeType, fileName, docType);
+    }
 
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
 
@@ -1436,12 +1614,7 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId) {
       if (rootName) {
         const noComparado = await getOrCreateNoComparadoFolder(rootName);
         await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '', fileName);
-        await postWithRetry(`${BACKEND_URL}/drive/move`, {
-          sessionId: store.get('sessionId'),
-          fileId: fileMeta.id,
-          addParents: [noComparado.id],
-          removeParents: fileMeta.noProcesadoId ? [fileMeta.noProcesadoId] : []
-        });
+        await moveDriveFileWithBackoff(fileMeta.id, [noComparado.id], fileMeta.noProcesadoId ? [fileMeta.noProcesadoId] : []);
       }
     } catch (moveError) {
       log.warn('No se pudo mover archivo a No comparado:', moveError);
@@ -1593,12 +1766,7 @@ async function getOrCreateDocumentosFolder(rootFolderName) {
 
 async function moveDriveFileToFolder(fileMeta, targetFolderId, currentFolderId) {
   if (!fileMeta?.id || !targetFolderId) return;
-  await postWithRetry(`${BACKEND_URL}/drive/move`, {
-    sessionId: store.get('sessionId'),
-    fileId: fileMeta.id,
-    addParents: [targetFolderId],
-    removeParents: currentFolderId ? [currentFolderId] : []
-  });
+  await moveDriveFileWithBackoff(fileMeta.id, [targetFolderId], currentFolderId ? [currentFolderId] : []);
 }
 
 async function moveAlbaranAssetsToDocumentos({
@@ -1827,24 +1995,105 @@ async function scanNoProcesado(trigger = 'startup') {
     message: `Encontrados ${allFiles.length} nuevos archivos en No procesado.`
   });
 
-  let idx = 0;
-  for (const fileMeta of allFiles) {
-    idx += 1;
-    const queueId = `startup-${idx}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const fileName = fileMeta?.name || 'Archivo';
-    emitToRenderer('startup-status', {
-      message: `Analizando ${fileName} (${idx}/${allFiles.length})`
+  if (allFiles.length > 1) {
+    const prepared = [];
+
+    for (let idx = 0; idx < allFiles.length; idx += 1) {
+      const fileMeta = allFiles[idx];
+      const queueId = `startup-${idx + 1}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const fileName = fileMeta?.name || 'Archivo';
+
+      emitToRenderer('startup-status', {
+        message: `Preparando ${fileName} (${idx + 1}/${allFiles.length})`
+      });
+      emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
+
+      try {
+        const downloaded = await downloadDriveFileToTemp(fileMeta, fileName);
+        prepared.push({
+          fileMeta,
+          queueId,
+          fileName,
+          localPath: downloaded.localPath,
+          mimeType: downloaded.mimeType,
+          docType: normalizeDocumentType(fileMeta?.sourceRoot)
+        });
+      } catch (error) {
+        emitToRenderer('queue-event', {
+          type: 'error',
+          id: queueId,
+          message: error.message || 'Error descargando archivo'
+        });
+      }
+    }
+
+    const byDocType = new Map();
+    prepared.forEach((item) => {
+      const key = item.docType || 'albaran';
+      if (!byDocType.has(key)) byDocType.set(key, []);
+      byDocType.get(key).push(item);
     });
 
-    try {
-      await processNoProcesadoFileWithEvents(fileMeta, queueId);
-    } catch (error) {
-      emitToRenderer('queue-event', {
-        type: 'error',
-        id: queueId,
-        message: error.message || 'Error desconocido'
+    for (const [docType, items] of byDocType.entries()) {
+      items.forEach((item) => {
+        emitToRenderer('queue-event', { type: 'step', id: item.queueId, step: 'IA' });
       });
-      log.error('Error procesando archivo en scan inicial:', error);
+
+      let batchResults = [];
+      try {
+        batchResults = await analyzeFilesWithBackendIABatch(
+          items.map((item) => ({
+            filePath: item.localPath,
+            mimeType: item.mimeType,
+            originalName: item.fileName
+          })),
+          docType
+        );
+      } catch (batchError) {
+        log.warn('Error en batch de IA durante scan inicial:', batchError);
+      }
+
+      for (let idx = 0; idx < items.length; idx += 1) {
+        const item = items[idx];
+        const batchResult = batchResults[idx] || null;
+        try {
+          await processNoProcesadoFileWithEvents(item.fileMeta, item.queueId, {
+            emitQueueInit: false,
+            localPath: item.localPath,
+            mimeType: item.mimeType,
+            analysisResult: batchResult?.success === false ? null : (batchResult?.raw || (batchResult?.analysis ? { success: true, analysis: batchResult.analysis } : null))
+          });
+        } catch (error) {
+          emitToRenderer('queue-event', {
+            type: 'error',
+            id: item.queueId,
+            message: error.message || 'Error desconocido'
+          });
+          log.error('Error procesando archivo en scan inicial (batch):', error);
+        }
+      }
+    }
+  } else {
+    let idx = 0;
+    for (const fileMeta of allFiles) {
+      idx += 1;
+      const queueId = `startup-${idx}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const fileName = fileMeta?.name || 'Archivo';
+      emitToRenderer('startup-status', {
+        message: `Analizando ${fileName} (${idx}/${allFiles.length})`
+      });
+
+      try {
+        await processNoProcesadoFileWithEvents(fileMeta, queueId);
+      } catch (error) {
+        emitToRenderer('queue-event', {
+          type: 'error',
+          id: queueId,
+          message: error.message || 'Error desconocido'
+        });
+        log.error('Error procesando archivo en scan inicial:', error);
+      }
     }
   }
 
@@ -1976,12 +2225,7 @@ async function processBillingAttachmentAsFactura(attachment) {
 
     const uploadedId = uploaded?.file?.id || uploaded?.fileId || uploaded?.id;
     if (uploadedId) {
-      await postWithRetry(`${BACKEND_URL}/drive/move`, {
-        sessionId,
-        fileId: uploadedId,
-        addParents: [facturasNoComparadoId],
-        removeParents: [facturasNoProcesadoId]
-      });
+      await moveDriveFileWithBackoff(uploadedId, [facturasNoComparadoId], [facturasNoProcesadoId]);
     }
 
     const compareResult = await compareFacturaWithAlbaranes({
@@ -1994,12 +2238,7 @@ async function processBillingAttachmentAsFactura(attachment) {
         || (compareResult?.matchedAlbaranes && compareResult.matchedAlbaranes.length > 0);
 
       if (shouldMoveFactura) {
-        await postWithRetry(`${BACKEND_URL}/drive/move`, {
-          sessionId,
-          fileId: uploadedId,
-          addParents: [facturasDocumentosId],
-          removeParents: [facturasNoComparadoId]
-        });
+        await moveDriveFileWithBackoff(uploadedId, [facturasDocumentosId], [facturasNoComparadoId]);
 
         const payload = buildTxtFilesFromAnalysis(analysisResult?.analysis || '', attachment?.filename || null);
         if (payload?.files?.length) {
@@ -2011,16 +2250,17 @@ async function processBillingAttachmentAsFactura(attachment) {
           const txtFiles = (txtContents?.data?.files || [])
             .filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
 
+          const pendingMoves = [];
           for (const file of payload.files) {
             const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
             if (!match?.id) continue;
-            await postWithRetry(`${BACKEND_URL}/drive/move`, {
-              sessionId,
+            pendingMoves.push({
               fileId: match.id,
               addParents: [facturasDocumentosId],
               removeParents: [facturasNoComparadoId]
             });
           }
+          await moveDriveFilesWithBackoff(pendingMoves, { concurrency: 2 });
         }
       }
     }

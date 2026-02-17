@@ -56,6 +56,40 @@ async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, d
   }
 }
 
+async function invokeAnalyzeFilesBatchWithFallback(items = [], docType = 'albaran') {
+  const validItems = (Array.isArray(items) ? items : []).filter(item => item?.filePath);
+  if (!validItems.length) return [];
+
+  try {
+    const results = await ipcRenderer.invoke('analyze-files-batch', validItems, docType);
+    if (Array.isArray(results) && results.length) {
+      return results;
+    }
+    throw new Error('Batch IA sin resultados');
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (!message.includes("No handler registered for 'analyze-files-batch'")) {
+      console.warn('Batch IA falló en renderer; fallback individual:', error);
+    }
+
+    const fallback = [];
+    for (const item of validItems) {
+      try {
+        const single = await invokeAnalyzeFileWithFallback(
+          item.filePath,
+          item.mimeType || '',
+          item.originalName || '',
+          docType
+        );
+        fallback.push({ success: true, analysis: single?.analysis || '', raw: single });
+      } catch (singleError) {
+        fallback.push({ success: false, analysis: '', error: singleError?.message || String(singleError) });
+      }
+    }
+    return fallback;
+  }
+}
+
 function sanitizeFileName(name) {
   return String(name || '')
     .replace(/[\\/:*?"<>|]/g, '_')
@@ -334,9 +368,11 @@ async function checkSession({ forceBillingSetup = false } = {}) {
       showStatus('Error al verificar carpetas estándar en Drive.', 'error');
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
+    // IMPORTANTE: quitar overlay antes de preguntar el email de facturas
+    // para que la pantalla de selección sea usable y no se quede bloqueada.
+    toggleStartupOverlay(false);
     await ensureBillingSetup(info, { forceSetup: forceBillingSetup });
     showUploadSection(info);
-    toggleStartupOverlay(false);
     await ipcRenderer.invoke('scan-no-procesado');
   } else {
     showSection('login');
@@ -379,6 +415,8 @@ async function uploadFilesToFolder(parentFolderName) {
         console.warn('No se pudo preparar carpeta No comparado:', folderError);
       }
 
+      const preparedItems = [];
+
       for (const p of filePaths) {
         const fileName = pathBasename(p);
         const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -387,87 +425,125 @@ async function uploadFilesToFolder(parentFolderName) {
         try {
           updateQueueStep(queueId, 'Subiendo');
           showStatus(`Subiendo ${fileName}...`, 'loading');
-          const result = await ipcRenderer.invoke('upload-file', p, target.id);
-          if (!result || !result.success) {
+          const uploadResult = await ipcRenderer.invoke('upload-file', p, target.id);
+          if (!uploadResult || !uploadResult.success) {
             throw new Error('Error al subir archivo');
           }
 
-          updateQueueStep(queueId, 'IA');
-          const mimeType = guessMimeTypeFromPath(p);
-          const analysisResult = await invokeAnalyzeFileWithFallback(p, mimeType, fileName, docType);
-          if (!analysisResult || !analysisResult.success) {
-            throw new Error('Error al analizar archivo');
-          }
+          preparedItems.push({
+            filePath: p,
+            fileName,
+            queueId,
+            mimeType: guessMimeTypeFromPath(p),
+            uploadResult,
+            uploadedFileId: uploadResult?.file?.id || uploadResult?.fileId || uploadResult?.id
+          });
+        } catch (error) {
+          markQueueError(queueId, error.message || 'Error desconocido');
+          showStatus(`Error al subir ${fileName}: ${error.message}`, 'error');
+        }
+      }
 
-          updateQueueStep(queueId, 'Enviando');
+      if (preparedItems.length > 0) {
+        preparedItems.forEach(item => updateQueueStep(item.queueId, 'IA'));
 
-          if (noComparadoFolder?.id) {
-            await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisResult?.analysis || '', fileName);
-            await ipcRenderer.invoke('move-file', result.file?.id || result?.fileId || result?.id, [noComparadoFolder.id], [target.id]);
-          }
+        const batchResults = await invokeAnalyzeFilesBatchWithFallback(
+          preparedItems.map(item => ({
+            filePath: item.filePath,
+            mimeType: item.mimeType,
+            originalName: item.fileName
+          })),
+          docType
+        );
 
-          if (docType === 'factura') {
-            try {
-              const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
-                facturaAnalysisText: analysisResult?.analysis || '',
-                rootFolderName: parentFolderName
-              });
+        for (let idx = 0; idx < preparedItems.length; idx += 1) {
+          const item = preparedItems[idx];
+          const analysisResult = batchResults[idx] || null;
 
-              if (compareResult && !compareResult.ok) {
-                try {
-                  await ipcRenderer.invoke('send-email', {
-                    to: 'bgoptimizing@gmail.com',
-                    subject: `Incongruencias en factura ${fileName}`,
-                    text: [
-                      `Factura: ${fileName}`,
-                      compareResult.message || 'Se encontraron incongruencias.',
-                      '',
-                      'Detalles:',
-                      ...(compareResult.issues || []).map(issue => `- ${issue}`)
-                    ].join('\n')
-                  });
-                  showStatus(`Email de incongruencias enviado para ${fileName}`, 'success');
-                } catch (emailError) {
-                  console.error('Error enviando email de incongruencias:', emailError);
-                  showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
-                }
+          try {
+            const analysisSuccess = Boolean(
+              analysisResult
+              && analysisResult.success !== false
+              && (analysisResult.analysis || analysisResult?.raw?.analysis)
+            );
+            if (!analysisSuccess) {
+              throw new Error(analysisResult?.error || 'Error al analizar archivo');
+            }
+
+            const analysisText = analysisResult.analysis || analysisResult?.raw?.analysis || '';
+            updateQueueStep(item.queueId, 'Enviando');
+
+            if (noComparadoFolder?.id) {
+              await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisText, item.fileName);
+              if (item.uploadedFileId) {
+                await ipcRenderer.invoke('move-file', item.uploadedFileId, [noComparadoFolder.id], [target.id]);
               }
+            }
 
-              if (documentosFolder?.id) {
-                const shouldMoveFactura = compareResult?.ok
-                  || (compareResult?.matchedAlbaranes && compareResult.matchedAlbaranes.length > 0);
-                if (shouldMoveFactura) {
-                  const targetId = documentosFolder.id;
-                  const removeId = noComparadoFolder?.id || target.id;
-                  const facturaFileId = result.file?.id || result?.fileId || result?.id;
-                  await ipcRenderer.invoke('move-file', facturaFileId, [targetId], removeId ? [removeId] : []);
+            if (docType === 'factura') {
+              try {
+                const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
+                  facturaAnalysisText: analysisText,
+                  rootFolderName: parentFolderName
+                });
 
-                  const payload = buildTxtFilesFromAnalysis(analysisResult?.analysis || '', fileName);
-                  if (payload?.files?.length) {
-                    const txtContents = await ipcRenderer.invoke('list-contents', noComparadoFolder?.id || target.id);
-                    const txtFiles = (txtContents?.files || []).filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
-                    for (const file of payload.files) {
-                      const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
-                      if (match) {
-                        await ipcRenderer.invoke('move-file', match.id, [targetId], removeId ? [removeId] : []);
+                if (compareResult && !compareResult.ok) {
+                  try {
+                    await ipcRenderer.invoke('send-email', {
+                      to: 'bgoptimizing@gmail.com',
+                      subject: `Incongruencias en factura ${item.fileName}`,
+                      text: [
+                        `Factura: ${item.fileName}`,
+                        compareResult.message || 'Se encontraron incongruencias.',
+                        '',
+                        'Detalles:',
+                        ...(compareResult.issues || []).map(issue => `- ${issue}`)
+                      ].join('\n')
+                    });
+                    showStatus(`Email de incongruencias enviado para ${item.fileName}`, 'success');
+                  } catch (emailError) {
+                    console.error('Error enviando email de incongruencias:', emailError);
+                    showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
+                  }
+                }
+
+                if (documentosFolder?.id) {
+                  const shouldMoveFactura = compareResult?.ok
+                    || (compareResult?.matchedAlbaranes && compareResult.matchedAlbaranes.length > 0);
+                  if (shouldMoveFactura) {
+                    const targetId = documentosFolder.id;
+                    const removeId = noComparadoFolder?.id || target.id;
+                    if (item.uploadedFileId) {
+                      await ipcRenderer.invoke('move-file', item.uploadedFileId, [targetId], removeId ? [removeId] : []);
+                    }
+
+                    const payload = buildTxtFilesFromAnalysis(analysisText, item.fileName);
+                    if (payload?.files?.length) {
+                      const txtContents = await ipcRenderer.invoke('list-contents', noComparadoFolder?.id || target.id);
+                      const txtFiles = (txtContents?.files || []).filter(existing => existing.mimeType !== 'application/vnd.google-apps.folder');
+                      for (const file of payload.files) {
+                        const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
+                        if (match) {
+                          await ipcRenderer.invoke('move-file', match.id, [targetId], removeId ? [removeId] : []);
+                        }
                       }
                     }
                   }
                 }
+              } catch (compareError) {
+                console.warn('Error comparando factura con albaranes:', compareError);
               }
-            } catch (compareError) {
-              console.warn('Error comparando factura con albaranes:', compareError);
             }
-          }
 
-          updateQueueStep(queueId, 'Enviado');
-          const finalLabel = noComparadoFolder?.name
-            ? `${parentFolderName}/No comparado`
-            : targetLabel;
-          showStatus(`¡${fileName} procesado y enviado a ${finalLabel}!`, 'success');
-        } catch (error) {
-          markQueueError(queueId, error.message || 'Error desconocido');
-          showStatus(`Error al subir ${fileName}: ${error.message}`, 'error');
+            updateQueueStep(item.queueId, 'Enviado');
+            const finalLabel = noComparadoFolder?.name
+              ? `${parentFolderName}/No comparado`
+              : targetLabel;
+            showStatus(`¡${item.fileName} procesado y enviado a ${finalLabel}!`, 'success');
+          } catch (error) {
+            markQueueError(item.queueId, error.message || 'Error desconocido');
+            showStatus(`Error al procesar ${item.fileName}: ${error.message}`, 'error');
+          }
         }
       }
 
@@ -621,8 +697,6 @@ if (shareBtn) {
       await ipcRenderer.invoke('share-folder', emails, folderToShare);
       showStatus('Carpeta compartida exitosamente', 'success');
       shareEmailsInput.value = '';
-      // Refresh shared lists to reflect the new permissions
-      await refreshSharedLists();
     } catch (err) {
       showStatus('Error al compartir: ' + err.message, 'error');
     } finally {
@@ -646,7 +720,6 @@ if (noProcesadoShareBtn) {
       await ipcRenderer.invoke('share-no-procesado-albaranes', [email]);
       showStatus('Carpeta No procesado compartida', 'success');
       noProcesadoShareEmailInput.value = '';
-      await refreshSharedLists();
     } catch (err) {
       showStatus('Error al compartir: ' + err.message, 'error');
     } finally {
@@ -656,71 +729,71 @@ if (noProcesadoShareBtn) {
   });
 }
 
-// Refrescar listas de usuarios compartidos en la UI (admin y main)
-async function refreshSharedLists() {
-  try {
-    const info = await ipcRenderer.invoke('get-user-info');
-    const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
-    let sharedNoProcesado = [];
+// // Refrescar listas de usuarios compartidos en la UI (admin y main)
+// async function refreshSharedLists() {
+//   try {
+//     const info = await ipcRenderer.invoke('get-user-info');
+//     const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
+//     let sharedNoProcesado = [];
 
-    try {
-      const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
-      sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
-    } catch (e) {
-      console.warn('No se pudo leer permisos en vivo de No procesado:', e);
-      sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
-        ? info.sharedNoProcesadoEmails
-        : [];
-    }
+//     try {
+//       const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
+//       sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
+//     } catch (e) {
+//       console.warn('No se pudo leer permisos en vivo de No procesado:', e);
+//       sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
+//         ? info.sharedNoProcesadoEmails
+//         : [];
+//     }
 
-    const sharedEmailsList = document.getElementById('shared-emails-list');
-    if (sharedEmailsList) {
-      sharedEmailsList.innerHTML = '';
-      if (shared.length === 0) {
-        sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-      } else {
-        shared.forEach(email => {
-          const div = document.createElement('div');
-          div.className = 'shared-item';
-          div.innerHTML = `<span>${email}</span>`;
-          sharedEmailsList.appendChild(div);
-        });
-      }
-    }
+//     const sharedEmailsList = document.getElementById('shared-emails-list');
+//     if (sharedEmailsList) {
+//       sharedEmailsList.innerHTML = '';
+//       if (shared.length === 0) {
+//         sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+//       } else {
+//         shared.forEach(email => {
+//           const div = document.createElement('div');
+//           div.className = 'shared-item';
+//           div.innerHTML = `<span>${email}</span>`;
+//           sharedEmailsList.appendChild(div);
+//         });
+//       }
+//     }
 
-    const mainShared = document.getElementById('main-shared-list');
-    if (mainShared) {
-      mainShared.innerHTML = '';
-      if (shared.length === 0) {
-        mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-      } else {
-        shared.forEach(email => {
-          const div = document.createElement('div');
-          div.className = 'shared-item';
-          div.textContent = email;
-          mainShared.appendChild(div);
-        });
-      }
-    }
+//     const mainShared = document.getElementById('main-shared-list');
+//     if (mainShared) {
+//       mainShared.innerHTML = '';
+//       if (shared.length === 0) {
+//         mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+//       } else {
+//         shared.forEach(email => {
+//           const div = document.createElement('div');
+//           div.className = 'shared-item';
+//           div.textContent = email;
+//           mainShared.appendChild(div);
+//         });
+//       }
+//     }
 
-    const noProcesadoList = document.getElementById('no-procesado-shared-list');
-    if (noProcesadoList) {
-      noProcesadoList.innerHTML = '';
-      if (sharedNoProcesado.length === 0) {
-        noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-      } else {
-        sharedNoProcesado.forEach(email => {
-          const div = document.createElement('div');
-          div.className = 'shared-item';
-          div.textContent = email;
-          noProcesadoList.appendChild(div);
-        });
-      }
-    }
-  } catch (e) {
-    console.error('Error refrescando shared lists:', e);
-  }
-}
+//     const noProcesadoList = document.getElementById('no-procesado-shared-list');
+//     if (noProcesadoList) {
+//       noProcesadoList.innerHTML = '';
+//       if (sharedNoProcesado.length === 0) {
+//         noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+//       } else {
+//         sharedNoProcesado.forEach(email => {
+//           const div = document.createElement('div');
+//           div.className = 'shared-item';
+//           div.textContent = email;
+//           noProcesadoList.appendChild(div);
+//         });
+//       }
+//     }
+//   } catch (e) {
+//     console.error('Error refrescando shared lists:', e);
+//   }
+// }
 
 // Navegación de carpetas y listado de archivos (mejorado)
 let currentFolderId = null;
@@ -1075,8 +1148,6 @@ async function showUploadSection(info) {
   const rootId = null;
   breadcrumb.push({ id: rootId, name: 'Mi unidad' });
   await loadFolderContents(null, false, 'Mi unidad');
-  // Refresh shared lists for the UI
-  await refreshSharedLists();
 }
 
 // Enlazar botones de menú lateral
