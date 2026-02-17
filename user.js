@@ -4,14 +4,8 @@ const path = require('path');
 
 // Elementos del DOM
 const loginSection = document.getElementById('login-section');
-const billingSetupSection = document.getElementById('billing-setup-section');
 const uploadSection = document.getElementById('upload-section');
 const loginBtn = document.getElementById('login-btn');
-const billingSameBtn = document.getElementById('billing-same-btn');
-const billingDifferentBtn = document.getElementById('billing-different-btn');
-const billingLoginBtn = document.getElementById('billing-login-btn');
-const billingQuestionText = document.getElementById('billing-question-text');
-const billingDifferentActions = document.getElementById('billing-different-actions');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
 const menuButtons = document.querySelectorAll('.menu-item');
@@ -25,6 +19,13 @@ const uploadQueue = new Map();
 const startupStatusEl = document.getElementById('startup-status');
 const startupOverlay = document.getElementById('startup-overlay');
 const startupOverlayMessage = document.getElementById('startup-overlay-message');
+const billingSetupSection = document.getElementById('billing-setup-section');
+const billingQuestionText = document.getElementById('billing-question-text');
+const billingSameBtn = document.getElementById('billing-same-btn');
+const billingDifferentBtn = document.getElementById('billing-different-btn');
+const billingDifferentActions = document.getElementById('billing-different-actions');
+const billingLoginBtn = document.getElementById('billing-login-btn');
+const billingEmailLabel = document.getElementById('billing-email');
 
 const QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
 
@@ -193,6 +194,109 @@ async function uploadGeneratedTxtFiles(targetFolderId, analysisText, sourceFileN
   }
 }
 
+function showSection(sectionName) {
+  const login = sectionName === 'login';
+  const billing = sectionName === 'billing';
+  const upload = sectionName === 'upload';
+
+  loginSection.classList.toggle('active', login);
+  if (billingSetupSection) {
+    billingSetupSection.classList.toggle('active', billing);
+  }
+  uploadSection.classList.toggle('active', upload);
+}
+
+function setBillingEmailLabel(email) {
+  if (!billingEmailLabel) return;
+  if (email) {
+    billingEmailLabel.textContent = email;
+    billingEmailLabel.classList.remove('placeholder');
+    return;
+  }
+  billingEmailLabel.textContent = 'Pendiente';
+  billingEmailLabel.classList.add('placeholder');
+}
+
+async function ensureBillingSetup(info, { forceSetup = false } = {}) {
+  const driveEmail = info?.email || 'este email';
+  const billingConfig = await ipcRenderer.invoke('get-billing-config');
+
+  if (billingConfig?.configured && !forceSetup) {
+    setBillingEmailLabel(billingConfig.email || null);
+    await ipcRenderer.invoke('start-billing-monitor');
+    return billingConfig;
+  }
+
+  if (billingQuestionText) {
+    billingQuestionText.textContent = `Has iniciado sesión en Drive con ${driveEmail}. ¿Quieres recibir las facturas en este mismo email o en otro?`;
+  }
+  if (billingDifferentActions) {
+    billingDifferentActions.style.display = 'none';
+  }
+
+  showSection('billing');
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+
+    const cleanUp = () => {
+      if (billingSameBtn) billingSameBtn.onclick = null;
+      if (billingDifferentBtn) billingDifferentBtn.onclick = null;
+      if (billingLoginBtn) billingLoginBtn.onclick = null;
+    };
+
+    const finish = (value) => {
+      if (resolved) return;
+      resolved = true;
+      cleanUp();
+      resolve(value);
+    };
+
+    if (billingSameBtn) {
+      billingSameBtn.onclick = async () => {
+        try {
+          billingSameBtn.disabled = true;
+          showStatus('Guardando email de facturas...', 'loading');
+          const result = await ipcRenderer.invoke('set-billing-email-same');
+          setBillingEmailLabel(result?.email || driveEmail || null);
+          await ipcRenderer.invoke('start-billing-monitor');
+          showStatus('Email de facturas configurado.', 'success');
+          finish(result || { configured: true, mode: 'same', email: driveEmail });
+        } catch (error) {
+          billingSameBtn.disabled = false;
+          showStatus(`Error al configurar email de facturas: ${error.message || error}`, 'error');
+        }
+      };
+    }
+
+    if (billingDifferentBtn) {
+      billingDifferentBtn.onclick = () => {
+        if (billingDifferentActions) {
+          billingDifferentActions.style.display = 'block';
+        }
+      };
+    }
+
+    if (billingLoginBtn) {
+      billingLoginBtn.onclick = async () => {
+        try {
+          billingLoginBtn.disabled = true;
+          showStatus('Inicia sesión con el email que recibirá facturas...', 'loading');
+          const billingUser = await ipcRenderer.invoke('google-login', false, 'billing');
+          const billingEmail = billingUser?.email || null;
+          setBillingEmailLabel(billingEmail);
+          await ipcRenderer.invoke('start-billing-monitor');
+          showStatus('Email de facturas alternativo configurado.', 'success');
+          finish({ configured: true, mode: 'separate', email: billingEmail });
+        } catch (error) {
+          billingLoginBtn.disabled = false;
+          showStatus(`Error en login del email de facturas: ${error.message || error}`, 'error');
+        }
+      };
+    }
+  });
+}
+
 // Verificar si ya hay sesión (se lanza tras login o recarga)
 checkSession();
 
@@ -203,8 +307,8 @@ loginBtn.addEventListener('click', async () => {
     loginBtn.disabled = true;
     showStatus('Se abrirá tu navegador para iniciar sesión con Google. Autoriza la app y vuelve aquí.', 'loading');
 
-    const user = await ipcRenderer.invoke('google-login', false);
-    checkSession();
+    await ipcRenderer.invoke('google-login', false);
+    checkSession({ forceBillingSetup: true });
 
   } catch (error) {
     alert('Error al iniciar sesión: ' + error.message);
@@ -214,7 +318,7 @@ loginBtn.addEventListener('click', async () => {
   }
 });
 
-async function checkSession() {
+async function checkSession({ forceBillingSetup = false } = {}) {
   const info = await ipcRenderer.invoke('get-user-info');
 
   if (info && info.email) {
@@ -230,91 +334,14 @@ async function checkSession() {
       showStatus('Error al verificar carpetas estándar en Drive.', 'error');
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
-    const billingConfig = await ipcRenderer.invoke('get-billing-config');
+    await ensureBillingSetup(info, { forceSetup: forceBillingSetup });
+    showUploadSection(info);
     toggleStartupOverlay(false);
-    showBillingSetupSection(info, billingConfig);
+    await ipcRenderer.invoke('scan-no-procesado');
   } else {
-    loginSection.classList.add('active');
-    billingSetupSection.classList.remove('active');
-    uploadSection.classList.remove('active');
+    showSection('login');
     toggleStartupOverlay(false);
   }
-}
-
-function showBillingSetupSection(info, billingConfig) {
-  const primaryEmail = info?.email || '';
-  const selectedBillingEmail = billingConfig?.email || '';
-  const isConfigured = Boolean(billingConfig?.configured && selectedBillingEmail);
-
-  if (isConfigured) {
-    showUploadSection(info, selectedBillingEmail);
-    ipcRenderer.invoke('scan-no-procesado');
-    return;
-  }
-
-  loginSection.classList.remove('active');
-  uploadSection.classList.remove('active');
-  billingSetupSection.classList.add('active');
-  if (billingDifferentActions) billingDifferentActions.style.display = 'none';
-
-  if (billingQuestionText) {
-    billingQuestionText.textContent = `Las facturas llegan al mismo email que acabas de iniciar sesión? (${primaryEmail})`;
-  }
-}
-
-if (billingSameBtn) {
-  billingSameBtn.addEventListener('click', async () => {
-    try {
-      billingSameBtn.disabled = true;
-      billingDifferentBtn.disabled = true;
-      showStatus('Configurando email de facturas...', 'loading');
-      const config = await ipcRenderer.invoke('set-billing-email-same');
-      const info = await ipcRenderer.invoke('get-user-info');
-      if (!info?.email) {
-        throw new Error('No hay sesión principal activa');
-      }
-      showUploadSection(info, config?.email || info.email);
-      await ipcRenderer.invoke('scan-no-procesado');
-      showStatus('Email de facturas configurado.', 'success');
-    } catch (error) {
-      showStatus(`Error al configurar email de facturas: ${error.message || error}`, 'error');
-    } finally {
-      billingSameBtn.disabled = false;
-      billingDifferentBtn.disabled = false;
-    }
-  });
-}
-
-if (billingDifferentBtn) {
-  billingDifferentBtn.addEventListener('click', () => {
-    if (billingDifferentActions) {
-      billingDifferentActions.style.display = '';
-    }
-  });
-}
-
-if (billingLoginBtn) {
-  billingLoginBtn.addEventListener('click', async () => {
-    try {
-      billingLoginBtn.disabled = true;
-      billingLoginBtn.textContent = 'Abriendo navegador...';
-      showStatus('Inicia sesión en el email de facturas desde el navegador.', 'loading');
-      const billingInfo = await ipcRenderer.invoke('google-login', false, 'billing');
-      const info = await ipcRenderer.invoke('get-user-info');
-      if (!info?.email) {
-        throw new Error('No hay sesión principal activa');
-      }
-      const billingEmail = billingInfo?.email || '';
-      showUploadSection(info, billingEmail || info.email);
-      await ipcRenderer.invoke('scan-no-procesado');
-      showStatus('Email de facturas configurado con cuenta distinta.', 'success');
-    } catch (error) {
-      showStatus(`Error al iniciar sesión en email de facturas: ${error.message || error}`, 'error');
-    } finally {
-      billingLoginBtn.disabled = false;
-      billingLoginBtn.textContent = 'Iniciar sesión en email de facturas';
-    }
-  });
 }
 
 // Nota: el login se gestiona en user.html. Esta página solo muestra la UI principal.
@@ -629,71 +656,71 @@ if (noProcesadoShareBtn) {
   });
 }
 
-// // Refrescar listas de usuarios compartidos en la UI (admin y main)
-// async function refreshSharedLists() {
-//   try {
-//     const info = await ipcRenderer.invoke('get-user-info');
-//     const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
-//     let sharedNoProcesado = [];
+// Refrescar listas de usuarios compartidos en la UI (admin y main)
+async function refreshSharedLists() {
+  try {
+    const info = await ipcRenderer.invoke('get-user-info');
+    const shared = (info && info.sharedEmails) ? info.sharedEmails : [];
+    let sharedNoProcesado = [];
 
-//     try {
-//       const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
-//       sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
-//     } catch (e) {
-//       console.warn('No se pudo leer permisos en vivo de No procesado:', e);
-//       sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
-//         ? info.sharedNoProcesadoEmails
-//         : [];
-//     }
+    try {
+      const noProcesadoResp = await ipcRenderer.invoke('get-no-procesado-shared-emails');
+      sharedNoProcesado = Array.isArray(noProcesadoResp?.emails) ? noProcesadoResp.emails : [];
+    } catch (e) {
+      console.warn('No se pudo leer permisos en vivo de No procesado:', e);
+      sharedNoProcesado = (info && info.sharedNoProcesadoEmails)
+        ? info.sharedNoProcesadoEmails
+        : [];
+    }
 
-//     const sharedEmailsList = document.getElementById('shared-emails-list');
-//     if (sharedEmailsList) {
-//       sharedEmailsList.innerHTML = '';
-//       if (shared.length === 0) {
-//         sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-//       } else {
-//         shared.forEach(email => {
-//           const div = document.createElement('div');
-//           div.className = 'shared-item';
-//           div.innerHTML = `<span>${email}</span>`;
-//           sharedEmailsList.appendChild(div);
-//         });
-//       }
-//     }
+    const sharedEmailsList = document.getElementById('shared-emails-list');
+    if (sharedEmailsList) {
+      sharedEmailsList.innerHTML = '';
+      if (shared.length === 0) {
+        sharedEmailsList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+      } else {
+        shared.forEach(email => {
+          const div = document.createElement('div');
+          div.className = 'shared-item';
+          div.innerHTML = `<span>${email}</span>`;
+          sharedEmailsList.appendChild(div);
+        });
+      }
+    }
 
-//     const mainShared = document.getElementById('main-shared-list');
-//     if (mainShared) {
-//       mainShared.innerHTML = '';
-//       if (shared.length === 0) {
-//         mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-//       } else {
-//         shared.forEach(email => {
-//           const div = document.createElement('div');
-//           div.className = 'shared-item';
-//           div.textContent = email;
-//           mainShared.appendChild(div);
-//         });
-//       }
-//     }
+    const mainShared = document.getElementById('main-shared-list');
+    if (mainShared) {
+      mainShared.innerHTML = '';
+      if (shared.length === 0) {
+        mainShared.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+      } else {
+        shared.forEach(email => {
+          const div = document.createElement('div');
+          div.className = 'shared-item';
+          div.textContent = email;
+          mainShared.appendChild(div);
+        });
+      }
+    }
 
-//     const noProcesadoList = document.getElementById('no-procesado-shared-list');
-//     if (noProcesadoList) {
-//       noProcesadoList.innerHTML = '';
-//       if (sharedNoProcesado.length === 0) {
-//         noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
-//       } else {
-//         sharedNoProcesado.forEach(email => {
-//           const div = document.createElement('div');
-//           div.className = 'shared-item';
-//           div.textContent = email;
-//           noProcesadoList.appendChild(div);
-//         });
-//       }
-//     }
-//   } catch (e) {
-//     console.error('Error refrescando shared lists:', e);
-//   }
-// }
+    const noProcesadoList = document.getElementById('no-procesado-shared-list');
+    if (noProcesadoList) {
+      noProcesadoList.innerHTML = '';
+      if (sharedNoProcesado.length === 0) {
+        noProcesadoList.innerHTML = '<p style="color:#666">No hay usuarios con acceso</p>';
+      } else {
+        sharedNoProcesado.forEach(email => {
+          const div = document.createElement('div');
+          div.className = 'shared-item';
+          div.textContent = email;
+          noProcesadoList.appendChild(div);
+        });
+      }
+    }
+  } catch (e) {
+    console.error('Error refrescando shared lists:', e);
+  }
+}
 
 // Navegación de carpetas y listado de archivos (mejorado)
 let currentFolderId = null;
@@ -1033,16 +1060,11 @@ function renderBreadcrumbs() {
 }
 
 // When showing upload section initially, load root or session.folderId
-async function showUploadSection(info, billingEmail = null) {
-  loginSection.classList.remove('active');
-  billingSetupSection.classList.remove('active');
-  uploadSection.classList.add('active');
+async function showUploadSection(info) {
+  showSection('upload');
   document.getElementById('user-email').textContent = info.email;
-  const billingEmailEl = document.getElementById('billing-email');
-  if (billingEmailEl) {
-    billingEmailEl.textContent = billingEmail || info.email || 'Pendiente';
-    billingEmailEl.classList.remove('placeholder');
-  }
+  const billingConfig = await ipcRenderer.invoke('get-billing-config');
+  setBillingEmailLabel(billingConfig?.email || null);
 
   // Load the full folder tree
   await loadFolderTree();
@@ -1055,11 +1077,6 @@ async function showUploadSection(info, billingEmail = null) {
   await loadFolderContents(null, false, 'Mi unidad');
   // Refresh shared lists for the UI
   await refreshSharedLists();
-  await ipcRenderer.invoke('start-billing-monitor');
-}
-
-async function refreshSharedLists() {
-  return;
 }
 
 // Enlazar botones de menú lateral

@@ -10,7 +10,7 @@ const { spawn } = require('child_process');
 
 const WATCH_SUBFOLDERS = ['Albaranes', 'Facturas'];
 const WATCHED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.txt'];
-const BILLING_EMAIL_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg'];
+const BILLING_EMAIL_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
 const EMAIL_RECIPIENT = 'bgoptimizing@gmail.com';
 const BILLING_POLL_INTERVAL_MS = 30000;
 
