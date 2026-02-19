@@ -13,6 +13,9 @@ const WATCHED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.
 const BILLING_EMAIL_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
 const EMAIL_RECIPIENT = 'bgoptimizing@gmail.com';
 const BILLING_POLL_INTERVAL_MS = 30000;
+const BILLING_PROCESS_DELAY_MS = 3000;
+const REPORTS_FOLDER_NAME = 'Informes - No tocar';
+const LAST_EMAIL_FILE_NAME = 'Ult_email.txt';
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
@@ -1713,6 +1716,144 @@ async function getOrCreateChildFolder(parentId, childName) {
   return { id: created.data.folderId, name: created.data.folderName || childName };
 }
 
+async function getDriveFileByExactName(parentId, fileName) {
+  const res = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId: store.get('sessionId'),
+    folderId: parentId || null
+  });
+
+  const files = (res.data?.files || []).filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
+  return files.find(file => (file.name || '').toLowerCase() === (fileName || '').toLowerCase()) || null;
+}
+
+async function ensureInformesTrackingFile() {
+  let informesFolder = await getDriveFolderByName(null, REPORTS_FOLDER_NAME);
+  if (!informesFolder) {
+    const created = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
+      sessionId: store.get('sessionId'),
+      name: REPORTS_FOLDER_NAME,
+      parentId: null
+    });
+    informesFolder = { id: created.data.folderId, name: created.data.folderName || REPORTS_FOLDER_NAME };
+  }
+
+  let lastEmailFile = await getDriveFileByExactName(informesFolder.id, LAST_EMAIL_FILE_NAME);
+  if (!lastEmailFile) {
+    const upsertResp = await postWithRetry(`${BACKEND_URL}/drive/upsert-text-file`, {
+      sessionId: store.get('sessionId'),
+      folderId: informesFolder.id,
+      fileName: LAST_EMAIL_FILE_NAME,
+      content: ''
+    }, { retries: 1, timeout: 60000 });
+    lastEmailFile = upsertResp?.data?.file || await getDriveFileByExactName(informesFolder.id, LAST_EMAIL_FILE_NAME);
+  }
+
+  return {
+    folder: informesFolder,
+    file: lastEmailFile
+  };
+}
+
+async function readLastProcessedEmailState() {
+  const tracking = await ensureInformesTrackingFile();
+  const file = tracking?.file;
+
+  if (!file?.id) {
+    return { tracking, state: null };
+  }
+
+  try {
+    const raw = await downloadDriveFileToString({ id: file.id, name: file.name || LAST_EMAIL_FILE_NAME });
+    const trimmed = (raw || '').trim();
+    if (!trimmed) {
+      return { tracking, state: null };
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      const messageId = parsed?.messageId ? String(parsed.messageId) : null;
+      const internalDate = parsed?.internalDate ? Number(parsed.internalDate) : null;
+      if (!messageId && !internalDate) {
+        return { tracking, state: null };
+      }
+      return {
+        tracking,
+        state: {
+          messageId,
+          internalDate: Number.isFinite(internalDate) ? internalDate : null
+        }
+      };
+    } catch {
+      // Compatibilidad: si el fichero tenía solo el messageId en texto plano
+      return {
+        tracking,
+        state: {
+          messageId: trimmed,
+          internalDate: null
+        }
+      };
+    }
+  } catch (error) {
+    log.warn('No se pudo leer Ult_email.txt:', error?.message || error);
+    return { tracking, state: null };
+  }
+}
+
+async function writeLastProcessedEmailState(tracking, messageInfo = {}) {
+  const folderId = tracking?.folder?.id;
+  if (!folderId) return;
+
+  const payload = {
+    messageId: messageInfo?.messageId || null,
+    internalDate: messageInfo?.internalDate || null,
+    subject: messageInfo?.subject || null,
+    from: messageInfo?.from || null,
+    date: messageInfo?.date || null,
+    updatedAt: new Date().toISOString()
+  };
+
+  await postWithRetry(`${BACKEND_URL}/drive/upsert-text-file`, {
+    sessionId: store.get('sessionId'),
+    folderId,
+    fileName: LAST_EMAIL_FILE_NAME,
+    content: JSON.stringify(payload, null, 2)
+  }, { retries: 1, timeout: 60000 });
+}
+
+function getPendingMessagesAfterLastState(messages = [], lastState = null) {
+  if (!lastState || (!lastState.messageId && !lastState.internalDate)) {
+    return messages;
+  }
+
+  const lastId = lastState?.messageId ? String(lastState.messageId) : null;
+  const lastTs = Number(lastState?.internalDate || 0);
+  const hasLastTs = Number.isFinite(lastTs) && lastTs > 0;
+
+  if (hasLastTs) {
+    return messages.filter((messageInfo) => {
+      const currentId = messageInfo?.messageId ? String(messageInfo.messageId) : null;
+      const currentTs = Number(messageInfo?.internalDate || 0);
+      const hasCurrentTs = Number.isFinite(currentTs) && currentTs > 0;
+      if (!hasCurrentTs) {
+        return currentId ? currentId !== lastId : true;
+      }
+      if (currentTs > lastTs) return true;
+      if (currentTs < lastTs) return false;
+      return currentId ? currentId !== lastId : false;
+    });
+  }
+
+  if (lastId) {
+    const idx = messages.findIndex((messageInfo) => String(messageInfo?.messageId || '') === lastId);
+    if (idx >= 0) {
+      return messages.slice(idx + 1);
+    }
+    return messages;
+  }
+
+  return messages;
+}
+
 async function getOrCreateNoComparadoFolder(rootFolderName) {
   const rootFolder = await getDriveFolderByName(null, rootFolderName);
   if (!rootFolder) {
@@ -1751,8 +1892,12 @@ async function ensureStandardFolders() {
   const childNames = ['No procesado', 'No comparado', 'Documentos'];
   const albaranes = await ensureRootFolderWithChildren('Albaranes', childNames);
   const facturas = await ensureRootFolderWithChildren('Facturas', childNames);
+  const informes = await ensureInformesTrackingFile();
   const created = [...albaranes.created, ...facturas.created];
-  return { albaranes, facturas, created };
+  if (informes?.folder?.name && !informes?.file?.id) {
+    created.push(`${informes.folder.name}/${LAST_EMAIL_FILE_NAME}`);
+  }
+  return { albaranes, facturas, informes, created };
 }
 
 async function getOrCreateDocumentosFolder(rootFolderName) {
@@ -2168,7 +2313,7 @@ async function ensureBillingSessionReady() {
 async function listBillingInvoiceAttachments(sessionId) {
   const response = await postWithRetry(`${BACKEND_URL}/gmail/invoice-attachments`, {
     sessionId,
-    maxResults: 10
+    maxResults: 500
   }, { timeout: 60000, retries: 1 });
   return Array.isArray(response?.data?.attachments) ? response.data.attachments : [];
 }
@@ -2298,17 +2443,40 @@ async function runBillingMonitorCycle() {
     const attachments = await listBillingInvoiceAttachments(billingSessionId);
     if (!attachments.length) return;
 
+    const lastEmailStateInfo = await readLastProcessedEmailState();
+    const tracking = lastEmailStateInfo?.tracking || null;
+    const lastEmailState = lastEmailStateInfo?.state || null;
+
     const grouped = new Map();
     attachments.forEach(item => {
       const key = item.messageId || `${Date.now()}-${Math.random()}`;
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(item);
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          messageId: item.messageId || null,
+          internalDate: item.internalDate ? Number(item.internalDate) : null,
+          subject: item.subject || null,
+          from: item.from || null,
+          date: item.date || null,
+          attachments: []
+        });
+      }
+      const current = grouped.get(key);
+      current.attachments.push(item);
+      if (!current.internalDate && item.internalDate) {
+        current.internalDate = Number(item.internalDate);
+      }
     });
 
-    const messagesToMark = [];
-    for (const [messageId, items] of grouped.entries()) {
+    const messages = Array.from(grouped.values())
+      .sort((a, b) => Number(a.internalDate || 0) - Number(b.internalDate || 0));
+    const pendingMessages = getPendingMessagesAfterLastState(messages, lastEmailState);
+    if (!pendingMessages.length) {
+      return;
+    }
+
+    for (const messageInfo of pendingMessages) {
       let ok = true;
-      for (const attachment of items) {
+      for (const attachment of messageInfo.attachments || []) {
         try {
           await processBillingAttachmentAsFactura(attachment);
         } catch (error) {
@@ -2316,11 +2484,13 @@ async function runBillingMonitorCycle() {
           log.error('Error procesando adjunto de facturas por email:', error);
         }
       }
-      if (ok && messageId) messagesToMark.push(messageId);
-    }
 
-    if (messagesToMark.length) {
-      await markBillingMessagesRead(billingSessionId, messagesToMark);
+      if (ok && messageInfo.messageId) {
+        await markBillingMessagesRead(billingSessionId, [messageInfo.messageId]);
+        await writeLastProcessedEmailState(tracking, messageInfo);
+      }
+
+      await sleep(BILLING_PROCESS_DELAY_MS);
     }
   } catch (error) {
     log.error('Error en ciclo del monitor de facturas por email:', error);
