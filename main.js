@@ -29,8 +29,6 @@ const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 800;
 const DEFAULT_RETRY_MAX_DELAY_MS = 15000;
-const LOCAL_LOGIN_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 días desde login
-const LOCAL_INACTIVITY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días sin abrir app
 
 const ANALYZE_ENDPOINTS = {
   albaran: '/analyze/document/albaran/file',
@@ -691,113 +689,11 @@ const startupScanState = {
   waitingForSession: false
 };
 
-function getAuthState() {
-  return store.get('authState') || null;
-}
-
-function setAuthState(state) {
-  store.set('authState', state);
-}
-
-function clearAuthState() {
-  store.delete('authState');
-}
-
-function isLocalSessionPolicyValid(authState) {
-  if (!authState) return false;
-  const now = Date.now();
-  const loginAt = Number(authState.loginAt || 0);
-  const lastActiveAt = Number(authState.lastActiveAt || 0);
-  if (!loginAt || !lastActiveAt) return false;
-
-  const ageFromLogin = now - loginAt;
-  const ageFromLastActive = now - lastActiveAt;
-
-  return ageFromLogin <= LOCAL_LOGIN_MAX_AGE_MS && ageFromLastActive <= LOCAL_INACTIVITY_MAX_AGE_MS;
-}
-
-function persistInteractiveLogin({ sessionId, refreshToken, isUser }) {
-  const now = Date.now();
-  store.set('sessionId', sessionId);
-  setAuthState({
-    sessionId,
-    refreshToken: refreshToken || null,
-    isUser: Boolean(isUser),
-    loginAt: now,
-    lastActiveAt: now
-  });
-}
-
-function touchLocalActivity(sessionIdOverride = null) {
-  const authState = getAuthState();
-  if (!authState) return;
-  setAuthState({
-    ...authState,
-    sessionId: sessionIdOverride || authState.sessionId || store.get('sessionId') || null,
-    lastActiveAt: Date.now()
-  });
-}
-
-async function ensureLocalSessionReady() {
-  const authState = getAuthState();
-
-  if (!authState || !isLocalSessionPolicyValid(authState)) {
-    store.delete('sessionId');
-    clearAuthState();
-    return null;
-  }
-
-  const currentSessionId = store.get('sessionId') || authState.sessionId;
-  if (currentSessionId) {
-    try {
-      const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId: currentSessionId }, { retries: 1 });
-      const refreshToken = verifyResp?.data?.refreshToken || authState.refreshToken || null;
-      store.set('sessionId', currentSessionId);
-      setAuthState({
-        ...authState,
-        sessionId: currentSessionId,
-        refreshToken,
-        lastActiveAt: Date.now()
-      });
-      return verifyResp.data;
-    } catch (error) {
-      // Si falla verificación, intentamos reautenticación silenciosa
-    }
-  }
-
-  if (!authState.refreshToken) {
-    store.delete('sessionId');
-    clearAuthState();
-    return null;
-  }
-
-  try {
-    const silentResp = await postWithRetry(`${BACKEND_URL}/auth/silent-login`, {
-      refreshToken: authState.refreshToken,
-      isUser: Boolean(authState.isUser)
-    }, { retries: 1 });
-
-    const newSessionId = silentResp?.data?.sessionId;
-    if (!newSessionId) {
-      throw new Error('Silent login sin sessionId');
-    }
-
-    const newRefreshToken = silentResp?.data?.refreshToken || authState.refreshToken;
-    store.set('sessionId', newSessionId);
-    setAuthState({
-      ...authState,
-      sessionId: newSessionId,
-      refreshToken: newRefreshToken,
-      // Mantener loginAt original para cumplir máx 90 días desde login
-      lastActiveAt: Date.now()
-    });
-
-    return silentResp.data;
-  } catch (error) {
-    store.delete('sessionId');
-    clearAuthState();
-    return null;
-  }
+function resetSessionOnAppStart() {
+  store.delete('sessionId');
+  store.delete('billingSessionId');
+  store.delete('billingEmail');
+  store.delete('billingMode');
 }
 
 function createWindow() {
@@ -844,6 +740,8 @@ function openBdWindow() {
 }
 
 app.whenReady().then(() => {
+  // La sesión no persiste entre reinicios de app: al abrir, siempre se vuelve a iniciar sesión.
+  resetSessionOnAppStart();
   createWindow();
 
   // Verificar actualizaciones disponibles
@@ -922,14 +820,9 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
       store.set('billingMode', 'separate');
       store.set('billingSessionId', sessionId);
       store.set('billingEmail', userData?.email || null);
-      store.set('billingRefreshToken', userData?.refreshToken || null);
       startBillingMonitor();
     } else {
-      persistInteractiveLogin({
-        sessionId,
-        refreshToken: userData?.refreshToken || null,
-        isUser: Boolean(isUser)
-      });
+      store.set('sessionId', sessionId);
 
       const mode = store.get('billingMode');
       if (mode === 'same') {
@@ -1336,18 +1229,17 @@ function promptForFolderName(defaultName) {
 
 // Obtener información de la sesión
 ipcMain.handle('get-user-info', async () => {
-  const ready = await ensureLocalSessionReady();
   const sessionId = store.get('sessionId');
-  if (!ready || !sessionId) return null;
+  if (!sessionId) return null;
   
   try {
     const response = await postWithRetry(`${BACKEND_URL}/session/info`, {
       sessionId
     });
-    touchLocalActivity(sessionId);
     
     return response.data;
   } catch (error) {
+    store.delete('sessionId');
     return null;
   }
 });
@@ -1380,7 +1272,6 @@ ipcMain.handle('set-billing-email-same', async () => {
   store.set('billingMode', 'same');
   store.set('billingSessionId', primarySessionId);
   store.set('billingEmail', email);
-  store.delete('billingRefreshToken');
   startBillingMonitor();
 
   return { configured: true, mode: 'same', email };
@@ -2299,7 +2190,6 @@ ipcMain.handle('logout', async () => {
 
   store.clear();
   stopBillingMonitor();
-  clearAuthState();
   app.relaunch();
   app.quit();
 });
@@ -2317,7 +2207,6 @@ async function ensureBillingSessionReady() {
   }
 
   let billingSessionId = store.get('billingSessionId');
-  const billingRefreshToken = store.get('billingRefreshToken');
 
   if (billingSessionId) {
     try {
@@ -2325,26 +2214,11 @@ async function ensureBillingSessionReady() {
       return billingSessionId;
     } catch (e) {
       billingSessionId = null;
+      store.delete('billingSessionId');
     }
   }
 
-  if (!billingRefreshToken) {
-    return null;
-  }
-
-  const silentResp = await postWithRetry(`${BACKEND_URL}/auth/silent-login`, {
-    refreshToken: billingRefreshToken,
-    isUser: false
-  }, { retries: 1 });
-
-  const newSessionId = silentResp?.data?.sessionId;
-  if (!newSessionId) return null;
-
-  store.set('billingSessionId', newSessionId);
-  store.set('billingEmail', silentResp?.data?.email || store.get('billingEmail') || null);
-  store.set('billingMode', 'separate');
-  store.set('billingRefreshToken', silentResp?.data?.refreshToken || billingRefreshToken);
-  return newSessionId;
+  return null;
 }
 
 async function listBillingInvoiceAttachments(sessionId) {

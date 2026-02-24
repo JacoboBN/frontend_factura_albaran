@@ -357,9 +357,6 @@ async function checkSession({ forceBillingSetup = false } = {}) {
 
   if (info && info.email) {
     try {
-      toggleStartupOverlay(true, 'Sesión iniciada. Esperando sincronización con Drive...');
-      showStatus('Sesión iniciada. Esperando sincronización con Drive...', 'loading');
-      await new Promise(resolve => setTimeout(resolve, 15000));
       toggleStartupOverlay(true, 'Comprobando carpetas estándar en Drive...');
       showStatus('Comprobando carpetas estándar en Drive...', 'loading');
       await ipcRenderer.invoke('ensure-standard-folders');
