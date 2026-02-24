@@ -1771,24 +1771,31 @@ async function readLastProcessedEmailState() {
 
     try {
       const parsed = JSON.parse(trimmed);
+      const historyId = parsed?.historyId ? String(parsed.historyId) : null;
       const messageId = parsed?.messageId ? String(parsed.messageId) : null;
       const internalDate = parsed?.internalDate ? Number(parsed.internalDate) : null;
-      if (!messageId && !internalDate) {
+      if (!historyId && !messageId && !internalDate) {
         return { tracking, state: null };
       }
       return {
         tracking,
         state: {
+          historyId,
           messageId,
-          internalDate: Number.isFinite(internalDate) ? internalDate : null
+          internalDate: Number.isFinite(internalDate) ? internalDate : null,
+          subject: parsed?.subject || null,
+          from: parsed?.from || null,
+          date: parsed?.date || null
         }
       };
     } catch {
-      // Compatibilidad: si el fichero tenía solo el messageId en texto plano
+      // Compatibilidad: si el fichero tenía solo el historyId/messageId en texto plano
+      const asNumber = Number(trimmed);
       return {
         tracking,
         state: {
-          messageId: trimmed,
+          historyId: Number.isFinite(asNumber) ? String(trimmed) : null,
+          messageId: Number.isFinite(asNumber) ? null : trimmed,
           internalDate: null
         }
       };
@@ -1804,6 +1811,7 @@ async function writeLastProcessedEmailState(tracking, messageInfo = {}) {
   if (!folderId) return;
 
   const payload = {
+    historyId: messageInfo?.historyId || null,
     messageId: messageInfo?.messageId || null,
     internalDate: messageInfo?.internalDate || null,
     subject: messageInfo?.subject || null,
@@ -1852,6 +1860,35 @@ function getPendingMessagesAfterLastState(messages = [], lastState = null) {
   }
 
   return messages;
+}
+
+async function fetchLatestBillingHistoryId(sessionId) {
+  const response = await postWithRetry(`${BACKEND_URL}/gmail/latest-history-id`, {
+    sessionId
+  }, { timeout: 60000, retries: 1 });
+
+  return {
+    historyId: response?.data?.historyId ? String(response.data.historyId) : null,
+    messageId: response?.data?.messageId || null,
+    internalDate: Number.isFinite(Number(response?.data?.internalDate))
+      ? Number(response.data.internalDate)
+      : null
+  };
+}
+
+async function listBillingHistoryAttachments(sessionId, startHistoryId) {
+  const response = await postWithRetry(`${BACKEND_URL}/gmail/history-attachments`, {
+    sessionId,
+    startHistoryId,
+    maxResults: 500
+  }, { timeout: 60000, retries: 1 });
+
+  return {
+    startHistoryId: response?.data?.startHistoryId ? String(response.data.startHistoryId) : null,
+    newestHistoryId: response?.data?.newestHistoryId ? String(response.data.newestHistoryId) : null,
+    attachments: Array.isArray(response?.data?.attachments) ? response.data.attachments : [],
+    messages: Array.isArray(response?.data?.messages) ? response.data.messages : []
+  };
 }
 
 async function getOrCreateNoComparadoFolder(rootFolderName) {
@@ -2440,12 +2477,70 @@ async function runBillingMonitorCycle() {
     const billingSessionId = await ensureBillingSessionReady();
     if (!billingSessionId) return;
 
-    const attachments = await listBillingInvoiceAttachments(billingSessionId);
-    if (!attachments.length) return;
-
     const lastEmailStateInfo = await readLastProcessedEmailState();
     const tracking = lastEmailStateInfo?.tracking || null;
     const lastEmailState = lastEmailStateInfo?.state || null;
+    let startHistoryId = lastEmailState?.historyId || null;
+
+    // Primera ejecución (baseline): guardar el latest historyId y no procesar histórico previo.
+    if (!startHistoryId) {
+      const latest = await fetchLatestBillingHistoryId(billingSessionId);
+      if (!latest?.historyId) {
+        return;
+      }
+
+      await writeLastProcessedEmailState(tracking, {
+        historyId: latest.historyId,
+        messageId: latest.messageId,
+        internalDate: latest.internalDate,
+        subject: null,
+        from: null,
+        date: null
+      });
+      return;
+    }
+
+    let historyPayload;
+    try {
+      historyPayload = await listBillingHistoryAttachments(billingSessionId, startHistoryId);
+    } catch (error) {
+      const status = Number(error?.response?.status);
+      const code = error?.response?.data?.code;
+      // startHistoryId caducado: re-baseline silencioso.
+      if (status === 410 || code === 'HISTORY_ID_EXPIRED') {
+        const latest = await fetchLatestBillingHistoryId(billingSessionId);
+        if (latest?.historyId) {
+          await writeLastProcessedEmailState(tracking, {
+            historyId: latest.historyId,
+            messageId: latest.messageId,
+            internalDate: latest.internalDate,
+            subject: null,
+            from: null,
+            date: null
+          });
+        }
+        return;
+      }
+      throw error;
+    }
+
+    const attachments = Array.isArray(historyPayload?.attachments) ? historyPayload.attachments : [];
+    const newestHistoryId = historyPayload?.newestHistoryId || startHistoryId;
+
+    // Aunque no haya adjuntos nuevos, avanzar el historyId para no repetir eventos.
+    if (!attachments.length) {
+      if (newestHistoryId && newestHistoryId !== startHistoryId) {
+        await writeLastProcessedEmailState(tracking, {
+          historyId: newestHistoryId,
+          messageId: lastEmailState?.messageId || null,
+          internalDate: lastEmailState?.internalDate || null,
+          subject: lastEmailState?.subject || null,
+          from: lastEmailState?.from || null,
+          date: lastEmailState?.date || null
+        });
+      }
+      return;
+    }
 
     const grouped = new Map();
     attachments.forEach(item => {
@@ -2453,6 +2548,7 @@ async function runBillingMonitorCycle() {
       if (!grouped.has(key)) {
         grouped.set(key, {
           messageId: item.messageId || null,
+          historyId: item.historyId ? String(item.historyId) : null,
           internalDate: item.internalDate ? Number(item.internalDate) : null,
           subject: item.subject || null,
           from: item.from || null,
@@ -2462,6 +2558,9 @@ async function runBillingMonitorCycle() {
       }
       const current = grouped.get(key);
       current.attachments.push(item);
+      if (!current.historyId && item.historyId) {
+        current.historyId = String(item.historyId);
+      }
       if (!current.internalDate && item.internalDate) {
         current.internalDate = Number(item.internalDate);
       }
@@ -2469,12 +2568,7 @@ async function runBillingMonitorCycle() {
 
     const messages = Array.from(grouped.values())
       .sort((a, b) => Number(a.internalDate || 0) - Number(b.internalDate || 0));
-    const pendingMessages = getPendingMessagesAfterLastState(messages, lastEmailState);
-    if (!pendingMessages.length) {
-      return;
-    }
-
-    for (const messageInfo of pendingMessages) {
+    for (const messageInfo of messages) {
       let ok = true;
       for (const attachment of messageInfo.attachments || []) {
         try {
@@ -2487,11 +2581,24 @@ async function runBillingMonitorCycle() {
 
       if (ok && messageInfo.messageId) {
         await markBillingMessagesRead(billingSessionId, [messageInfo.messageId]);
-        await writeLastProcessedEmailState(tracking, messageInfo);
+        await writeLastProcessedEmailState(tracking, {
+          ...messageInfo,
+          historyId: messageInfo.historyId || newestHistoryId
+        });
       }
 
       await sleep(BILLING_PROCESS_DELAY_MS);
     }
+
+    // Garantía final: persistir siempre el último historyId conocido del ciclo.
+    await writeLastProcessedEmailState(tracking, {
+      historyId: newestHistoryId,
+      messageId: lastEmailState?.messageId || null,
+      internalDate: lastEmailState?.internalDate || null,
+      subject: lastEmailState?.subject || null,
+      from: lastEmailState?.from || null,
+      date: lastEmailState?.date || null
+    });
   } catch (error) {
     log.error('Error en ciclo del monitor de facturas por email:', error);
   } finally {
