@@ -272,6 +272,43 @@ function buildTxtFilesFromAnalysis(analysisText, sourceFileName = null) {
   return { files, isFactura };
 }
 
+function getFacturaReferenceForEmail(analysisText, fallback = 'XX') {
+  try {
+    const sections = extractAnalysisSections(analysisText);
+    if (sections?.isFactura && sections?.resumenRaw) {
+      const resumenLine = sections.resumenRaw.split(/\r?\n/).find(line => line.trim());
+      if (resumenLine) {
+        const resumenObj = JSON.parse(resumenLine);
+        const facturaNum = resumenObj?.num_factura;
+        if (facturaNum && facturaNum !== 'NaN') {
+          return sanitizeFileName(facturaNum);
+        }
+      }
+    }
+  } catch (e) {
+    // fallback
+  }
+
+  const fallbackBase = path.basename(String(fallback || 'XX'), path.extname(String(fallback || '')));
+  return sanitizeFileName(fallbackBase || 'XX');
+}
+
+function getComparedAlbaranesLabel(compareResult = {}) {
+  const fromExpected = Array.isArray(compareResult?.expectedAlbaranes)
+    ? compareResult.expectedAlbaranes
+    : [];
+  const fromMatched = Array.isArray(compareResult?.matchedAlbaranes)
+    ? compareResult.matchedAlbaranes
+    : [];
+
+  const source = fromExpected.length ? fromExpected : fromMatched;
+  const normalized = source
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  return normalized.length ? normalized.join(', ') : 'N/A';
+}
+
 async function uploadGeneratedTxtFiles(targetFolderId, analysisText, sourceFileName = null) {
   if (!targetFolderId) return;
   const payload = buildTxtFilesFromAnalysis(analysisText, sourceFileName);
@@ -605,6 +642,20 @@ async function uploadFilesToFolder(parentFolderName) {
                   } catch (emailError) {
                     console.error('Error enviando email de incongruencias:', emailError);
                     showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
+                  }
+                } else if (compareResult?.ok) {
+                  try {
+                    const facturaRef = getFacturaReferenceForEmail(analysisText, item.fileName || 'XX');
+                    const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+                    await ipcRenderer.invoke('send-email', {
+                      to: 'bgoptimizing@gmail.com',
+                      subject: `Factura ${facturaRef} bien`,
+                      text: `Se han comparado los albaranes ${albaranesLabel} y todo bien.`
+                    });
+                    showStatus(`Email de validación enviado para ${item.fileName}`, 'success');
+                  } catch (emailOkError) {
+                    console.error('Error enviando email de validación:', emailOkError);
+                    showStatus(`No se pudo enviar email de validación: ${emailOkError.message || emailOkError}`, 'error');
                   }
                 }
 

@@ -290,6 +290,33 @@ function parseFacturaAnalysis(analysisText) {
   };
 }
 
+function getFacturaReferenceForEmail(analysisText, fallback = 'XX') {
+  const parsed = parseFacturaAnalysis(analysisText);
+  const facturaNum = parsed?.resumen?.num_factura;
+  if (facturaNum && facturaNum !== 'NaN') {
+    return sanitizeFileName(facturaNum);
+  }
+
+  const fallbackBase = path.basename(String(fallback || 'XX'), path.extname(String(fallback || '')));
+  return sanitizeFileName(fallbackBase || 'XX');
+}
+
+function getComparedAlbaranesLabel(compareResult = {}) {
+  const fromExpected = Array.isArray(compareResult?.expectedAlbaranes)
+    ? compareResult.expectedAlbaranes
+    : [];
+  const fromMatched = Array.isArray(compareResult?.matchedAlbaranes)
+    ? compareResult.matchedAlbaranes
+    : [];
+
+  const source = fromExpected.length ? fromExpected : fromMatched;
+  const normalized = source
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  return normalized.length ? normalized.join(', ') : 'N/A';
+}
+
 function aggregateArticles(lines, mode = 'factura') {
   const map = new Map();
   lines.forEach(item => {
@@ -2565,6 +2592,16 @@ async function processBillingAttachmentAsFactura(attachment) {
           'Detalles:',
           ...(compareResult.issues || []).map(issue => `- ${issue}`)
         ].join('\n')
+      );
+    } else if (compareResult?.ok) {
+      const facturaRef = getFacturaReferenceForEmail(
+        analysisResult?.analysis || '',
+        attachment?.filename || 'XX'
+      );
+      const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+      await sendEmailNotification(
+        `Factura ${facturaRef} bien`,
+        `Se han comparado los albaranes ${albaranesLabel} y todo bien.`
       );
     }
   } finally {
