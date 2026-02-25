@@ -30,6 +30,10 @@ const OCR_RETRY_DELAY_MS = 2000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 800;
 const DEFAULT_RETRY_MAX_DELAY_MS = 15000;
 
+// Polling de jobs asíncronos
+const JOB_POLL_INTERVAL_MS = 2000;   // cada 2 s
+const JOB_POLL_MAX_ATTEMPTS = 150;   // máx ~5 minutos
+
 const ANALYZE_ENDPOINTS = {
   albaran: '/analyze/document/albaran/file',
   factura: '/analyze/document/factura/file'
@@ -459,7 +463,7 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
 
     const fileEndpoint = getAnalyzeEndpoint(docType);
     const directResponse = await postWithRetry(fileEndpoint, formData, {
-      timeout: 120000,
+      timeout: 30000, // Timeout corto: solo espera el job_id, no el procesamiento completo
       retries: 1,
       axiosOptions: {
         headers: {
@@ -470,6 +474,21 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
       }
     });
 
+    // Flujo asíncrono (nuevo): el backend devuelve { job_id } inmediatamente
+    if (directResponse?.data?.job_id) {
+      mainLog('info', 'analyzeFileWithBackendIA:job-submitted', {
+        endpoint: fileEndpoint,
+        jobId: directResponse.data.job_id
+      });
+      const jobResult = await pollJobResult(directResponse.data.job_id);
+      mainLog('info', 'analyzeFileWithBackendIA:job-done', {
+        jobId: directResponse.data.job_id,
+        hasAnalysis: Boolean(jobResult?.analysis)
+      });
+      return jobResult;
+    }
+
+    // Flujo síncrono (legado): el backend devuelve { success, analysis } directamente
     mainLog('info', 'analyzeFileWithBackendIA:file-endpoint-ok', {
       endpoint: fileEndpoint,
       hasAnalysis: Boolean(directResponse?.data?.analysis)
@@ -570,6 +589,56 @@ async function postWithRetry(url, data, options = {}) {
       await sleep(finalDelay);
     }
   }
+}
+
+/**
+ * Hace polling a GET /job/:id hasta que el job tenga status 'done' o 'error'.
+ * Retorna el result del job si se completa con éxito, lanza error si falla o hay timeout.
+ */
+async function pollJobResult(jobId, options = {}) {
+  const intervalMs = options.intervalMs || JOB_POLL_INTERVAL_MS;
+  const maxAttempts = options.maxAttempts || JOB_POLL_MAX_ATTEMPTS;
+
+  mainLog('info', 'pollJobResult:start', { jobId, intervalMs, maxAttempts });
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await sleep(intervalMs);
+
+    try {
+      const response = await axios.get(`${BACKEND_URL}/job/${jobId}`, {
+        timeout: DEFAULT_TIMEOUT_MS
+      });
+
+      const job = response.data;
+
+      if (job.status === 'done') {
+        mainLog('info', 'pollJobResult:done', { jobId, attempt });
+        return job.result;
+      }
+
+      if (job.status === 'error') {
+        mainLog('error', 'pollJobResult:job-error', { jobId, error: job.error });
+        throw new Error(job.error || `El job ${jobId} terminó con error`);
+      }
+
+      // status === 'pending' | 'processing' → seguir esperando
+      mainLog('info', 'pollJobResult:waiting', { jobId, status: job.status, attempt });
+    } catch (error) {
+      // Si el error es del propio job (lo lanzamos arriba), propagar
+      if (error.message && !error.response) {
+        // Error de red transitorio — reintentar
+        mainLog('warn', 'pollJobResult:network-error', {
+          jobId,
+          attempt,
+          message: error.message
+        });
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error(`Timeout esperando resultado del job ${jobId} (${maxAttempts * intervalMs / 1000}s)`);
 }
 
 async function moveDriveFileWithBackoff(fileId, addParents = [], removeParents = []) {
@@ -679,8 +748,8 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
     });
 
     const response = await postWithRetry(`${BACKEND_URL}/analyze/documents/batch/file`, formData, {
-      timeout: 240000,
-      retries: 2,
+      timeout: 60000, // Timeout corto: solo espera el job_id, no el procesamiento completo
+      retries: 1,
       delayMs: 1200,
       maxDelayMs: 12000,
       backoffFactor: 2,
@@ -693,7 +762,21 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
       }
     });
 
-    const results = Array.isArray(response?.data?.results) ? response.data.results : [];
+    // Flujo asíncrono (nuevo): el backend devuelve { job_id } inmediatamente
+    let responseData = response?.data;
+    if (responseData?.job_id) {
+      mainLog('info', 'analyzeFilesWithBackendIABatch:job-submitted', {
+        jobId: responseData.job_id,
+        filesCount: validItems.length
+      });
+      responseData = await pollJobResult(responseData.job_id);
+      mainLog('info', 'analyzeFilesWithBackendIABatch:job-done', {
+        jobId: response.data.job_id,
+        hasResults: Boolean(responseData?.results)
+      });
+    }
+
+    const results = Array.isArray(responseData?.results) ? responseData.results : [];
     if (!results.length) {
       throw new Error('Batch IA sin resultados');
     }
