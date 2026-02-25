@@ -41,7 +41,12 @@ function serializeUiError(error) {
 }
 
 function uiLog(level = 'log', message = '', data = undefined) {
-  const method = typeof console[level] === 'function' ? level : 'log';
+  const normalizedLevel = String(level || '').toLowerCase();
+  if (normalizedLevel !== 'error') {
+    return;
+  }
+
+  const method = 'error';
   const timestamp = new Date().toISOString();
   if (data === undefined) {
     console[method](`${RENDERER_LOG_PREFIX} ${timestamp} ${message}`);

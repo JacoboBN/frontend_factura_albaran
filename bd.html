@@ -178,7 +178,12 @@
     const BD_LOG_PREFIX = '[Frontend-BD]';
 
     function bdLog(level = 'log', message = '', data = undefined) {
-      const method = typeof console[level] === 'function' ? level : 'log';
+      const normalizedLevel = String(level || '').toLowerCase();
+      if (normalizedLevel !== 'error') {
+        return;
+      }
+
+      const method = 'error';
       const timestamp = new Date().toISOString();
       if (data === undefined) {
         console[method](`${BD_LOG_PREFIX} ${timestamp} ${message}`);

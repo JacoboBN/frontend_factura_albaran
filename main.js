@@ -72,7 +72,12 @@ function summarizeArgs(args = []) {
 }
 
 function mainLog(level = 'info', message = '', data = undefined) {
-  const method = typeof log[level] === 'function' ? level : 'info';
+  const normalizedLevel = String(level || '').toLowerCase();
+  if (normalizedLevel !== 'error') {
+    return;
+  }
+
+  const method = 'error';
   const timestamp = new Date().toISOString();
   const text = `${MAIN_LOG_PREFIX} ${timestamp} ${message}`;
 
