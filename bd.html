@@ -175,7 +175,45 @@
     const XLSX = require('xlsx');
     let driveUrl = '';
 
+    const BD_LOG_PREFIX = '[Frontend-BD]';
+
+    function bdLog(level = 'log', message = '', data = undefined) {
+      const method = typeof console[level] === 'function' ? level : 'log';
+      const timestamp = new Date().toISOString();
+      if (data === undefined) {
+        console[method](`${BD_LOG_PREFIX} ${timestamp} ${message}`);
+        return;
+      }
+      console[method](`${BD_LOG_PREFIX} ${timestamp} ${message}`, data);
+    }
+
+    function serializeError(error) {
+      if (!error) return null;
+      return {
+        message: error.message,
+        name: error.name,
+        stack: error.stack
+      };
+    }
+
+    window.addEventListener('error', (event) => {
+      bdLog('error', 'window.error', {
+        message: event?.message,
+        filename: event?.filename,
+        lineno: event?.lineno,
+        colno: event?.colno,
+        error: serializeError(event?.error)
+      });
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      bdLog('error', 'window.unhandledrejection', {
+        reason: serializeError(event?.reason) || event?.reason
+      });
+    });
+
     function setStatus(message, type = 'loading') {
+      bdLog(type === 'error' ? 'error' : 'log', 'setStatus', { message, type });
       const el = document.getElementById('status');
       if (!el) return;
       el.textContent = message;
@@ -187,12 +225,18 @@
       const contentEl = document.getElementById('sheet-content');
       const sheetNames = workbook?.SheetNames || [];
 
+      bdLog('log', 'renderWorkbook:start', {
+        totalSheets: sheetNames.length,
+        sheetNames
+      });
+
       if (!sheetNames.length) {
         contentEl.innerHTML = '<p>No hay hojas para mostrar.</p>';
         return;
       }
 
       const showSheet = (name) => {
+        bdLog('log', 'renderWorkbook:showSheet', { name });
         const sheet = workbook.Sheets[name];
         contentEl.innerHTML = XLSX.utils.sheet_to_html(sheet, { editable: false });
         Array.from(tabsEl.querySelectorAll('.sheet-tab')).forEach(tab => {
@@ -214,9 +258,17 @@
 
     async function loadExcelFromDrive() {
       setStatus('Buscando el Excel en Drive...', 'loading');
+      bdLog('log', 'loadExcelFromDrive:start');
 
       const excel = await ipcRenderer.invoke('get-drive-proveedores-excel');
       driveUrl = `https://drive.google.com/file/d/${excel.fileId}/view`;
+
+      bdLog('log', 'loadExcelFromDrive:file-metadata', {
+        fileId: excel.fileId,
+        fileName: excel.fileName,
+        mimeType: excel.mimeType,
+        base64Length: excel?.dataBase64?.length || 0
+      });
 
       const binaryString = atob(excel.dataBase64 || '');
       const len = binaryString.length;
@@ -224,6 +276,9 @@
       for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
 
       const workbook = XLSX.read(bytes, { type: 'array' });
+      bdLog('log', 'loadExcelFromDrive:workbook-parsed', {
+        totalSheets: workbook?.SheetNames?.length || 0
+      });
       renderWorkbook(workbook);
       setStatus('Excel cargado correctamente (solo lectura).', 'success');
     }
@@ -232,6 +287,7 @@
     const backBtn = document.getElementById('back-btn');
     if (backBtn) {
       backBtn.addEventListener('click', () => {
+        bdLog('log', 'back button:click');
         if (window.opener) {
           window.close();
           return;
@@ -250,16 +306,20 @@
     const openDriveBtn = document.getElementById('open-drive-btn');
     if (openDriveBtn) {
       openDriveBtn.addEventListener('click', async () => {
+        bdLog('log', 'open drive button:click', { hasDriveUrl: Boolean(driveUrl) });
         if (!driveUrl) {
           setStatus('Aún no se ha cargado el enlace del archivo.', 'error');
           return;
         }
         await ipcRenderer.invoke('open-external', driveUrl);
+        bdLog('log', 'open drive button:ok', { driveUrl });
       });
     }
 
     window.addEventListener('DOMContentLoaded', () => {
+      bdLog('log', 'DOMContentLoaded');
       loadExcelFromDrive().catch((error) => {
+        bdLog('error', 'loadExcelFromDrive:error', serializeError(error));
         console.error(error);
         setStatus(error.message || 'No se pudo cargar el Excel.', 'error');
       });

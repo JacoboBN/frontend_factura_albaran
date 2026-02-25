@@ -42,6 +42,130 @@ const LEGACY_ANALYZE_TEXT_ENDPOINTS = {
 
 let batchAnalyzeEndpointUnavailable = false;
 
+const MAIN_LOG_PREFIX = '[Frontend-Main]';
+
+function serializeError(error) {
+  if (!error) return null;
+  return {
+    message: error.message,
+    name: error.name,
+    stack: error.stack,
+    code: error.code,
+    status: error?.response?.status,
+    data: error?.response?.data
+  };
+}
+
+function summarizeArgs(args = []) {
+  return (Array.isArray(args) ? args : []).map((value) => {
+    if (value === null || value === undefined) return value;
+    if (Array.isArray(value)) return { type: 'array', length: value.length };
+    if (typeof value === 'string') return value.length > 120 ? `${value.slice(0, 120)}...` : value;
+    if (typeof value === 'object') {
+      return {
+        type: 'object',
+        keys: Object.keys(value).slice(0, 10)
+      };
+    }
+    return value;
+  });
+}
+
+function mainLog(level = 'info', message = '', data = undefined) {
+  const method = typeof log[level] === 'function' ? level : 'info';
+  const timestamp = new Date().toISOString();
+  const text = `${MAIN_LOG_PREFIX} ${timestamp} ${message}`;
+
+  if (data === undefined) {
+    log[method](text);
+    return;
+  }
+
+  log[method](text, data);
+}
+
+const originalIpcMainHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => {
+  mainLog('info', 'IPC handler:registered', { channel });
+
+  return originalIpcMainHandle(channel, async (event, ...args) => {
+    const startedAt = Date.now();
+    mainLog('info', 'IPC call:start', {
+      channel,
+      args: summarizeArgs(args)
+    });
+
+    try {
+      const result = await listener(event, ...args);
+      mainLog('info', 'IPC call:ok', {
+        channel,
+        durationMs: Date.now() - startedAt
+      });
+      return result;
+    } catch (error) {
+      mainLog('error', 'IPC call:error', {
+        channel,
+        durationMs: Date.now() - startedAt,
+        error: serializeError(error)
+      });
+      throw error;
+    }
+  });
+};
+
+axios.interceptors.request.use(
+  (config) => {
+    const method = (config.method || 'get').toUpperCase();
+    mainLog('info', 'HTTP request:start', {
+      method,
+      url: config.url,
+      timeout: config.timeout,
+      hasData: Boolean(config.data)
+    });
+    config.metadata = { startedAt: Date.now() };
+    return config;
+  },
+  (error) => {
+    mainLog('error', 'HTTP request:interceptor-error', serializeError(error));
+    return Promise.reject(error);
+  }
+);
+
+axios.interceptors.response.use(
+  (response) => {
+    const startedAt = response?.config?.metadata?.startedAt || Date.now();
+    const durationMs = Date.now() - startedAt;
+    mainLog('info', 'HTTP request:ok', {
+      method: (response?.config?.method || 'get').toUpperCase(),
+      url: response?.config?.url,
+      status: response?.status,
+      durationMs
+    });
+    return response;
+  },
+  (error) => {
+    const startedAt = error?.config?.metadata?.startedAt || Date.now();
+    const durationMs = Date.now() - startedAt;
+    mainLog('error', 'HTTP request:error', {
+      method: (error?.config?.method || 'get').toUpperCase(),
+      url: error?.config?.url,
+      durationMs,
+      error: serializeError(error)
+    });
+    return Promise.reject(error);
+  }
+);
+
+process.on('uncaughtException', (error) => {
+  mainLog('error', 'uncaughtException', serializeError(error));
+});
+
+process.on('unhandledRejection', (reason) => {
+  mainLog('error', 'unhandledRejection', {
+    reason: serializeError(reason) || reason
+  });
+});
+
 function normalizeDocumentType(value) {
   const normalized = (value || '').toString().toLowerCase();
   if (normalized.includes('factura')) return 'factura';
@@ -285,6 +409,13 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
     throw new Error('Sesión requerida para analizar documento');
   }
 
+  mainLog('info', 'analyzeFileWithBackendIA:start', {
+    filePath,
+    mimeType,
+    originalName,
+    docType
+  });
+
   // 1) Flujo principal: enviar el ARCHIVO real al backend para que lo procese con OpenAI.
   try {
     const formData = new FormData();
@@ -307,8 +438,17 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
       }
     });
 
+    mainLog('info', 'analyzeFileWithBackendIA:file-endpoint-ok', {
+      endpoint: fileEndpoint,
+      hasAnalysis: Boolean(directResponse?.data?.analysis)
+    });
+
     return directResponse.data;
   } catch (error) {
+    mainLog('warn', 'analyzeFileWithBackendIA:file-endpoint-error', {
+      docType,
+      error: serializeError(error)
+    });
     const status = error?.response?.status;
     const canTryLegacyTextMode = status === 404;
     if (!canTryLegacyTextMode) {
@@ -322,6 +462,11 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
       text: ocrResult.text,
       quality: ocrResult.quality,
       sessionId
+    });
+
+    mainLog('info', 'analyzeFileWithBackendIA:legacy-endpoint-ok', {
+      endpoint: textEndpoint,
+      hasAnalysis: Boolean(textResponse?.data?.analysis)
     });
 
     return textResponse.data;
@@ -363,9 +508,20 @@ async function postWithRetry(url, data, options = {}) {
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
+      mainLog('info', 'postWithRetry:attempt', {
+        url,
+        attempt: attempt + 1,
+        totalAttempts: retries + 1,
+        timeout
+      });
       return await axios.post(url, data, { timeout, ...axiosOptions });
     } catch (error) {
       if (attempt >= retries || !isRetryableError(error)) {
+        mainLog('error', 'postWithRetry:final-error', {
+          url,
+          attempt: attempt + 1,
+          error: serializeError(error)
+        });
         throw error;
       }
 
@@ -373,6 +529,12 @@ async function postWithRetry(url, data, options = {}) {
       const finalDelay = jitter
         ? Math.floor(expDelay * (0.75 + Math.random() * 0.5))
         : expDelay;
+      mainLog('warn', 'postWithRetry:retrying', {
+        url,
+        nextAttempt: attempt + 2,
+        delayMs: finalDelay,
+        error: serializeError(error)
+      });
       await sleep(finalDelay);
     }
   }
@@ -402,6 +564,12 @@ async function moveDriveFileWithBackoff(fileId, addParents = [], removeParents =
     backoffFactor: 2,
     jitter: true,
     timeout: 60000
+  });
+
+  mainLog('info', 'moveDriveFileWithBackoff:ok', {
+    fileId,
+    addParents: addList,
+    removeParents: removeList
   });
 
   return response.data;
@@ -438,6 +606,12 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
 
   const validItems = (Array.isArray(items) ? items : []).filter(item => item?.filePath);
   if (!validItems.length) return [];
+
+  mainLog('info', 'analyzeFilesWithBackendIABatch:start', {
+    docType,
+    totalItems: validItems.length,
+    batchEndpointUnavailable: batchAnalyzeEndpointUnavailable
+  });
 
   if (validItems.length === 1) {
     const one = validItems[0];
@@ -508,6 +682,10 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
     } else {
       log.warn('Batch IA falló; usando fallback individual:', batchError?.message || batchError);
     }
+    mainLog('warn', 'analyzeFilesWithBackendIABatch:fallback', {
+      docType,
+      error: serializeError(batchError)
+    });
     const fallbackResults = [];
     for (const item of validItems) {
       try {
@@ -637,9 +815,22 @@ async function performLocalOCR(filePath, mimeType, originalName) {
 
     // Verify ocr.exe exists
     if (!fs.existsSync(ocrExePath)) {
+      mainLog('error', 'performLocalOCR:missing-executable', {
+        ocrExePath,
+        filePath,
+        mimeType,
+        originalName
+      });
       reject(new Error(`OCR executable not found at: ${ocrExePath}`));
       return;
     }
+
+    mainLog('info', 'performLocalOCR:start', {
+      filePath,
+      mimeType,
+      originalName,
+      ocrExePath
+    });
 
     const ocrProcess = spawn(ocrExePath, [filePath]);
 
@@ -657,16 +848,35 @@ async function performLocalOCR(filePath, mimeType, originalName) {
     ocrProcess.on('close', (code) => {
       if (code !== 0) {
         const message = stderr || 'OCR failed with no stderr output';
+        mainLog('error', 'performLocalOCR:error', {
+          filePath,
+          code,
+          stderr: message
+        });
         reject(new Error(`OCR failed: ${message}`));
       } else {
         try {
           const result = JSON.parse(stdout);
           if (result.error) {
+            mainLog('error', 'performLocalOCR:result-error', {
+              filePath,
+              resultError: result.error
+            });
             reject(new Error(result.error));
           } else {
+            mainLog('info', 'performLocalOCR:ok', {
+              filePath,
+              quality: result.quality,
+              textLength: result?.text?.length || 0
+            });
             resolve(result);
           }
         } catch (e) {
+          mainLog('error', 'performLocalOCR:invalid-json-output', {
+            filePath,
+            stdoutPreview: (stdout || '').slice(0, 500),
+            stderrPreview: (stderr || '').slice(0, 500)
+          });
           reject(new Error('Invalid JSON output from OCR'));
         }
       }
@@ -740,6 +950,7 @@ function openBdWindow() {
 }
 
 app.whenReady().then(() => {
+  mainLog('info', 'app.whenReady:start');
   // La sesión no persiste entre reinicios de app: al abrir, siempre se vuelve a iniciar sesión.
   resetSessionOnAppStart();
   createWindow();
@@ -783,13 +994,16 @@ app.whenReady().then(() => {
   });
 
   // El escaneo de "No procesado" se lanzará desde el renderer tras iniciar sesión.
+  mainLog('info', 'app.whenReady:done');
 });
 
 app.on('window-all-closed', () => {
+  mainLog('info', 'app event:window-all-closed', { platform: process.platform });
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('activate', () => {
+  mainLog('info', 'app event:activate', { openWindows: BrowserWindow.getAllWindows().length });
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
@@ -2018,6 +2232,11 @@ async function listDriveFilesInNoProcesado(rootFolderName) {
 }
 
 async function scanNoProcesado(trigger = 'startup') {
+  mainLog('info', 'scanNoProcesado:start', {
+    trigger,
+    inProgress: startupScanState.inProgress,
+    completed: startupScanState.completed
+  });
   if (startupScanState.inProgress) return;
   if (startupScanState.completed && trigger !== 'manual' && trigger !== 'login') return;
 
@@ -2031,6 +2250,7 @@ async function scanNoProcesado(trigger = 'startup') {
     });
     startupScanState.inProgress = false;
     startupScanState.waitingForSession = true;
+    mainLog('warn', 'scanNoProcesado:no-session');
     return;
   }
 
@@ -2045,6 +2265,7 @@ async function scanNoProcesado(trigger = 'startup') {
       });
       startupScanState.inProgress = false;
       startupScanState.waitingForSession = true;
+      mainLog('warn', 'scanNoProcesado:session-expired');
       return;
     }
   }
@@ -2056,11 +2277,18 @@ async function scanNoProcesado(trigger = 'startup') {
   const facturasFiles = await listDriveFilesInNoProcesado('Facturas');
 
   const allFiles = [...albaranesFiles, ...facturasFiles];
+  mainLog('info', 'scanNoProcesado:files-found', {
+    trigger,
+    albaranes: albaranesFiles.length,
+    facturas: facturasFiles.length,
+    total: allFiles.length
+  });
   if (allFiles.length === 0) {
     emitToRenderer('startup-status', { message: 'No se encontraron archivos en No procesado.' });
     startupScanState.inProgress = false;
     startupScanState.completed = true;
     startupScanState.waitingForSession = false;
+    mainLog('info', 'scanNoProcesado:no-files');
     return;
   }
 
@@ -2174,6 +2402,7 @@ async function scanNoProcesado(trigger = 'startup') {
   startupScanState.inProgress = false;
   startupScanState.completed = true;
   startupScanState.waitingForSession = false;
+  mainLog('info', 'scanNoProcesado:done', { processed: allFiles.length });
 }
 
 // Cerrar sesión
@@ -2344,6 +2573,8 @@ async function runBillingMonitorCycle() {
   if (billingMonitorRunning) return;
   billingMonitorRunning = true;
 
+  mainLog('info', 'runBillingMonitorCycle:start');
+
   try {
     const primarySessionId = store.get('sessionId');
     if (!primarySessionId) return;
@@ -2413,8 +2644,18 @@ async function runBillingMonitorCycle() {
           date: lastEmailState?.date || null
         });
       }
+      mainLog('info', 'runBillingMonitorCycle:no-new-attachments', {
+        newestHistoryId,
+        startHistoryId
+      });
       return;
     }
+
+    mainLog('info', 'runBillingMonitorCycle:attachments-found', {
+      totalAttachments: attachments.length,
+      startHistoryId,
+      newestHistoryId
+    });
 
     const grouped = new Map();
     attachments.forEach(item => {
@@ -2475,8 +2716,10 @@ async function runBillingMonitorCycle() {
     });
   } catch (error) {
     log.error('Error en ciclo del monitor de facturas por email:', error);
+    mainLog('error', 'runBillingMonitorCycle:error', serializeError(error));
   } finally {
     billingMonitorRunning = false;
+    mainLog('info', 'runBillingMonitorCycle:finish');
   }
 }
 

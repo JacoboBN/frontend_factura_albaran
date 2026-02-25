@@ -29,6 +29,43 @@ const billingEmailLabel = document.getElementById('billing-email');
 
 const QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
 
+const RENDERER_LOG_PREFIX = '[Frontend-User]';
+
+function serializeUiError(error) {
+  if (!error) return null;
+  return {
+    message: error.message,
+    name: error.name,
+    stack: error.stack
+  };
+}
+
+function uiLog(level = 'log', message = '', data = undefined) {
+  const method = typeof console[level] === 'function' ? level : 'log';
+  const timestamp = new Date().toISOString();
+  if (data === undefined) {
+    console[method](`${RENDERER_LOG_PREFIX} ${timestamp} ${message}`);
+    return;
+  }
+  console[method](`${RENDERER_LOG_PREFIX} ${timestamp} ${message}`, data);
+}
+
+window.addEventListener('error', (event) => {
+  uiLog('error', 'window.error', {
+    message: event?.message,
+    filename: event?.filename,
+    lineno: event?.lineno,
+    colno: event?.colno,
+    error: serializeUiError(event?.error)
+  });
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  uiLog('error', 'window.unhandledrejection', {
+    reason: serializeUiError(event?.reason) || event?.reason
+  });
+});
+
 function guessMimeTypeFromPath(filePath = '') {
   const ext = (path.extname(filePath || '') || '').toLowerCase();
   const mimeByExt = {
@@ -45,11 +82,21 @@ function guessMimeTypeFromPath(filePath = '') {
 }
 
 async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, docType) {
+  uiLog('log', 'invokeAnalyzeFileWithFallback:start', {
+    filePath,
+    mimeType,
+    originalName,
+    docType
+  });
   try {
-    return await ipcRenderer.invoke('analyze-file', filePath, mimeType, originalName, docType);
+    const result = await ipcRenderer.invoke('analyze-file', filePath, mimeType, originalName, docType);
+    uiLog('log', 'invokeAnalyzeFileWithFallback:ok', { docType, hasAnalysis: Boolean(result?.analysis) });
+    return result;
   } catch (error) {
+    uiLog('warn', 'invokeAnalyzeFileWithFallback:error', { error: serializeUiError(error) });
     const message = String(error?.message || '');
     if (message.includes("No handler registered for 'analyze-file'")) {
+      uiLog('warn', 'invokeAnalyzeFileWithFallback:using-legacy-handler', { docType });
       return ipcRenderer.invoke('analyze-document', filePath, mimeType, originalName, docType);
     }
     throw error;
@@ -60,9 +107,18 @@ async function invokeAnalyzeFilesBatchWithFallback(items = [], docType = 'albara
   const validItems = (Array.isArray(items) ? items : []).filter(item => item?.filePath);
   if (!validItems.length) return [];
 
+  uiLog('log', 'invokeAnalyzeFilesBatchWithFallback:start', {
+    docType,
+    items: validItems.length
+  });
+
   try {
     const results = await ipcRenderer.invoke('analyze-files-batch', validItems, docType);
     if (Array.isArray(results) && results.length) {
+      uiLog('log', 'invokeAnalyzeFilesBatchWithFallback:ok', {
+        docType,
+        results: results.length
+      });
       return results;
     }
     throw new Error('Batch IA sin resultados');
@@ -71,6 +127,10 @@ async function invokeAnalyzeFilesBatchWithFallback(items = [], docType = 'albara
     if (!message.includes("No handler registered for 'analyze-files-batch'")) {
       console.warn('Batch IA falló en renderer; fallback individual:', error);
     }
+    uiLog('warn', 'invokeAnalyzeFilesBatchWithFallback:fallback-individual', {
+      docType,
+      error: serializeUiError(error)
+    });
 
     const fallback = [];
     for (const item of validItems) {
@@ -253,9 +313,11 @@ function setBillingEmailLabel(email) {
 
 async function ensureBillingSetup(info, { forceSetup = false } = {}) {
   const driveEmail = info?.email || 'este email';
+  uiLog('log', 'ensureBillingSetup:start', { driveEmail, forceSetup });
   const billingConfig = await ipcRenderer.invoke('get-billing-config');
 
   if (billingConfig?.configured && !forceSetup) {
+    uiLog('log', 'ensureBillingSetup:already-configured', billingConfig);
     setBillingEmailLabel(billingConfig.email || null);
     await ipcRenderer.invoke('start-billing-monitor');
     return billingConfig;
@@ -292,11 +354,13 @@ async function ensureBillingSetup(info, { forceSetup = false } = {}) {
           billingSameBtn.disabled = true;
           showStatus('Guardando email de facturas...', 'loading');
           const result = await ipcRenderer.invoke('set-billing-email-same');
+          uiLog('log', 'ensureBillingSetup:set-billing-email-same:ok', result);
           setBillingEmailLabel(result?.email || driveEmail || null);
           await ipcRenderer.invoke('start-billing-monitor');
           showStatus('Email de facturas configurado.', 'success');
           finish(result || { configured: true, mode: 'same', email: driveEmail });
         } catch (error) {
+          uiLog('error', 'ensureBillingSetup:set-billing-email-same:error', serializeUiError(error));
           billingSameBtn.disabled = false;
           showStatus(`Error al configurar email de facturas: ${error.message || error}`, 'error');
         }
@@ -318,11 +382,13 @@ async function ensureBillingSetup(info, { forceSetup = false } = {}) {
           showStatus('Inicia sesión con el email que recibirá facturas...', 'loading');
           const billingUser = await ipcRenderer.invoke('google-login', false, 'billing');
           const billingEmail = billingUser?.email || null;
+          uiLog('log', 'ensureBillingSetup:billing-login:ok', { billingEmail });
           setBillingEmailLabel(billingEmail);
           await ipcRenderer.invoke('start-billing-monitor');
           showStatus('Email de facturas alternativo configurado.', 'success');
           finish({ configured: true, mode: 'separate', email: billingEmail });
         } catch (error) {
+          uiLog('error', 'ensureBillingSetup:billing-login:error', serializeUiError(error));
           billingLoginBtn.disabled = false;
           showStatus(`Error en login del email de facturas: ${error.message || error}`, 'error');
         }
@@ -336,15 +402,18 @@ checkSession();
 
 // Login con Google
 loginBtn.addEventListener('click', async () => {
+  uiLog('log', 'login button:click');
   try {
     loginBtn.textContent = 'Abriendo navegador...';
     loginBtn.disabled = true;
     showStatus('Se abrirá tu navegador para iniciar sesión con Google. Autoriza la app y vuelve aquí.', 'loading');
 
     await ipcRenderer.invoke('google-login', false);
+    uiLog('log', 'login button:google-login:ok');
     checkSession({ forceBillingSetup: true });
 
   } catch (error) {
+    uiLog('error', 'login button:google-login:error', serializeUiError(error));
     alert('Error al iniciar sesión: ' + error.message);
     loginBtn.textContent = 'Iniciar sesión con Google';
     loginBtn.disabled = false;
@@ -353,15 +422,19 @@ loginBtn.addEventListener('click', async () => {
 });
 
 async function checkSession({ forceBillingSetup = false } = {}) {
+  uiLog('log', 'checkSession:start', { forceBillingSetup });
   const info = await ipcRenderer.invoke('get-user-info');
 
   if (info && info.email) {
+    uiLog('log', 'checkSession:session-found', { email: info.email });
     try {
       toggleStartupOverlay(true, 'Comprobando carpetas estándar en Drive...');
       showStatus('Comprobando carpetas estándar en Drive...', 'loading');
       await ipcRenderer.invoke('ensure-standard-folders');
+      uiLog('log', 'checkSession:ensure-standard-folders:ok');
       showStatus('Carpetas estándar verificadas en Drive.', 'success');
     } catch (folderError) {
+      uiLog('error', 'checkSession:ensure-standard-folders:error', serializeUiError(folderError));
       showStatus('Error al verificar carpetas estándar en Drive.', 'error');
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
@@ -369,9 +442,12 @@ async function checkSession({ forceBillingSetup = false } = {}) {
     // para que la pantalla de selección sea usable y no se quede bloqueada.
     toggleStartupOverlay(false);
     await ensureBillingSetup(info, { forceSetup: forceBillingSetup });
+    uiLog('log', 'checkSession:billing-setup:ok');
     showUploadSection(info);
     await ipcRenderer.invoke('scan-no-procesado');
+    uiLog('log', 'checkSession:scan-no-procesado:ok');
   } else {
+    uiLog('warn', 'checkSession:no-active-session');
     showSection('login');
     toggleStartupOverlay(false);
   }
@@ -381,8 +457,10 @@ async function checkSession({ forceBillingSetup = false } = {}) {
 
 // Subir archivo a carpeta específica (albaranes o facturas) dentro de "No procesado"
 async function uploadFilesToFolder(parentFolderName) {
+  uiLog('log', 'uploadFilesToFolder:start', { parentFolderName });
   try {
     const filePaths = await ipcRenderer.invoke('select-file');
+    uiLog('log', 'uploadFilesToFolder:selected-files', { count: filePaths?.length || 0 });
 
     if (filePaths && filePaths.length > 0) {
       try {
@@ -401,6 +479,10 @@ async function uploadFilesToFolder(parentFolderName) {
       }
 
       const target = await getOrCreateNoProcesadoFolder(parentFolder.id);
+      uiLog('log', 'uploadFilesToFolder:target-folder', {
+        parentFolderName,
+        targetId: target?.id
+      });
       const targetLabel = `${parentFolderName}/No procesado`;
 
       let noComparadoFolder = null;
@@ -442,6 +524,11 @@ async function uploadFilesToFolder(parentFolderName) {
       }
 
       if (preparedItems.length > 0) {
+        uiLog('log', 'uploadFilesToFolder:analyzing-items', {
+          parentFolderName,
+          count: preparedItems.length,
+          docType
+        });
         preparedItems.forEach(item => updateQueueStep(item.queueId, 'IA'));
 
         const batchResults = await invokeAnalyzeFilesBatchWithFallback(
@@ -467,6 +554,11 @@ async function uploadFilesToFolder(parentFolderName) {
               throw new Error(analysisResult?.error || 'Error al analizar archivo');
             }
 
+            uiLog('log', 'uploadFilesToFolder:item-analysis-ok', {
+              fileName: item.fileName,
+              docType
+            });
+
             const analysisText = analysisResult.analysis || analysisResult?.raw?.analysis || '';
             updateQueueStep(item.queueId, 'Enviando');
 
@@ -482,6 +574,13 @@ async function uploadFilesToFolder(parentFolderName) {
                 const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
                   facturaAnalysisText: analysisText,
                   rootFolderName: parentFolderName
+                });
+
+                uiLog('log', 'uploadFilesToFolder:factura-compare-result', {
+                  fileName: item.fileName,
+                  ok: compareResult?.ok,
+                  issues: compareResult?.issues?.length || 0,
+                  matchedAlbaranes: compareResult?.matchedAlbaranes?.length || 0
                 });
 
                 if (compareResult && !compareResult.ok) {
@@ -528,6 +627,10 @@ async function uploadFilesToFolder(parentFolderName) {
                   }
                 }
               } catch (compareError) {
+                uiLog('error', 'uploadFilesToFolder:compare-error', {
+                  fileName: item.fileName,
+                  error: serializeUiError(compareError)
+                });
                 console.warn('Error comparando factura con albaranes:', compareError);
               }
             }
@@ -538,6 +641,10 @@ async function uploadFilesToFolder(parentFolderName) {
               : targetLabel;
             showStatus(`¡${item.fileName} procesado y enviado a ${finalLabel}!`, 'success');
           } catch (error) {
+            uiLog('error', 'uploadFilesToFolder:item-error', {
+              fileName: item.fileName,
+              error: serializeUiError(error)
+            });
             markQueueError(item.queueId, error.message || 'Error desconocido');
             showStatus(`Error al procesar ${item.fileName}: ${error.message}`, 'error');
           }
@@ -547,6 +654,7 @@ async function uploadFilesToFolder(parentFolderName) {
       await loadFolderContents(noComparadoFolder?.id || target.id, true, noComparadoFolder?.name || target.name || 'No procesado');
     }
   } catch (error) {
+    uiLog('error', 'uploadFilesToFolder:error', serializeUiError(error));
     showStatus('Error al subir archivo: ' + error.message, 'error');
   }
 }
@@ -622,6 +730,7 @@ function renderSearchResults(items = [], query = '') {
 
 async function performSearch(query) {
   const trimmed = query.trim();
+  uiLog('log', 'performSearch:start', { query: trimmed });
   if (!trimmed) {
     renderSearchResults([], '');
     return;
@@ -630,8 +739,13 @@ async function performSearch(query) {
   try {
     const response = await ipcRenderer.invoke('search-drive-files', trimmed);
     const items = Array.isArray(response?.files) ? response.files : [];
+    uiLog('log', 'performSearch:ok', { query: trimmed, results: items.length });
     renderSearchResults(items, trimmed);
   } catch (error) {
+    uiLog('error', 'performSearch:error', {
+      query: trimmed,
+      error: serializeUiError(error)
+    });
     console.error('Error en búsqueda:', error);
     renderSearchResults([], trimmed);
     showStatus('No se pudo completar la búsqueda', 'error');
@@ -798,6 +912,7 @@ let breadcrumb = [];
 let folderTreeData = null;
 
 async function loadFolderTree() {
+  uiLog('log', 'loadFolderTree:start');
   try {
     const res = await ipcRenderer.invoke('list-folders');
     const folders = Array.isArray(res) ? res : (res.folders || []);
@@ -829,8 +944,13 @@ async function loadFolderTree() {
     });
 
     folderTreeData = tree;
+    uiLog('log', 'loadFolderTree:ok', {
+      totalFolders: Object.keys(nodes).length,
+      rootFolders: Object.keys(tree).length
+    });
     return tree;
   } catch (err) {
+    uiLog('error', 'loadFolderTree:error', serializeUiError(err));
     console.error('Error loading folder tree:', err);
     return {};
   }
@@ -952,6 +1072,11 @@ function renderTreeNode(container, node, currentFolderId, level) {
 }
 
 async function loadFolderContents(folderId = null, pushToBreadcrumb = true, folderName = null) {
+  uiLog('log', 'loadFolderContents:start', {
+    folderId,
+    pushToBreadcrumb,
+    folderName
+  });
   try {
     const res = await ipcRenderer.invoke('list-contents', folderId);
     const files = res.files || [];
@@ -994,6 +1119,12 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
 
     const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
     const docs = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
+    uiLog('log', 'loadFolderContents:ok', {
+      folderId: folderIdUsed,
+      total: files.length,
+      folders: folders.length,
+      files: docs.length
+    });
 
     const folderTree = document.getElementById('folder-tree');
     const folderSummary = document.getElementById('folder-summary');
@@ -1083,6 +1214,7 @@ async function loadFolderContents(folderId = null, pushToBreadcrumb = true, fold
     }
 
   } catch (err) {
+    uiLog('error', 'loadFolderContents:error', serializeUiError(err));
     showStatus('Error cargando carpeta: ' + (err.message || err), 'error');
   }
 }
@@ -1131,6 +1263,7 @@ function renderBreadcrumbs() {
 
 // When showing upload section initially, load root or session.folderId
 async function showUploadSection(info) {
+  uiLog('log', 'showUploadSection:start', { email: info?.email });
   showSection('upload');
   document.getElementById('user-email').textContent = info.email;
   const billingConfig = await ipcRenderer.invoke('get-billing-config');
@@ -1145,6 +1278,7 @@ async function showUploadSection(info) {
   const rootId = null;
   breadcrumb.push({ id: rootId, name: 'Mi unidad' });
   await loadFolderContents(null, false, 'Mi unidad');
+  uiLog('log', 'showUploadSection:done');
 }
 
 // Enlazar botones de menú lateral
@@ -1225,7 +1359,9 @@ if (backBtn) {
 
 // Cerrar sesión
 logoutBtn.addEventListener('click', async () => {
+  uiLog('log', 'logout button:click');
   if (confirm('¿Estás seguro de que quieres cerrar sesión?')) {
+    uiLog('log', 'logout confirmed');
     await ipcRenderer.invoke('logout');
   }
 });
@@ -1233,6 +1369,7 @@ logoutBtn.addEventListener('click', async () => {
 
 
 function showStatus(message, type) {
+  uiLog(type === 'error' ? 'error' : 'log', 'showStatus', { message, type });
   const status = document.getElementById('status');
   status.textContent = message;
   status.className = `status ${type}`;
@@ -1254,6 +1391,7 @@ function toggleStartupOverlay(isVisible, message) {
 ipcRenderer.on('startup-status', (event, payload) => {
   if (!startupStatusEl) return;
   const message = payload?.message || 'Estado de inicio: esperando...';
+  uiLog('log', 'event:startup-status', { message });
   startupStatusEl.textContent = message;
   // Mantener el indicador pequeño dentro de la UI durante el escaneo
   toggleStartupOverlay(false);
@@ -1261,6 +1399,13 @@ ipcRenderer.on('startup-status', (event, payload) => {
 
 ipcRenderer.on('queue-event', (event, payload) => {
   if (!payload || !payload.id) return;
+  uiLog('log', 'event:queue-event', {
+    id: payload.id,
+    type: payload.type,
+    step: payload.step,
+    fileName: payload.fileName,
+    message: payload.message
+  });
 
   if (payload.type === 'init') {
     initQueueItem(payload.id, payload.fileName || 'Archivo');
