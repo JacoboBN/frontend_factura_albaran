@@ -2602,6 +2602,17 @@ async function processBillingAttachmentAsFactura(attachment) {
     throw new Error('No hay sesión principal para procesar factura');
   }
 
+  const queueId = `billing-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const queueFileName = attachment?.filename || 'Factura (email)';
+  emitToRenderer('queue-event', {
+    type: 'init',
+    id: queueId,
+    fileName: queueFileName,
+    source: 'billing-email',
+    docType: 'factura',
+    steps: ['Subiendo', 'IA', 'Comparando', 'comparado', 'email']
+  });
+
   const standard = await ensureStandardFolders();
   const facturasNoProcesadoId = standard?.facturas?.children?.['No procesado']?.id;
   const facturasNoComparadoId = standard?.facturas?.children?.['No comparado']?.id;
@@ -2613,7 +2624,10 @@ async function processBillingAttachmentAsFactura(attachment) {
   const localPath = attachmentToTempFile(attachment);
 
   try {
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Subiendo' });
     const uploaded = await uploadLocalFileToDrive(sessionId, localPath, facturasNoProcesadoId);
+
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
     const analysisResult = await analyzeFileWithBackendIA(
       localPath,
       attachment?.mimeType || '',
@@ -2628,10 +2642,12 @@ async function processBillingAttachmentAsFactura(attachment) {
       await moveDriveFileWithBackoff(uploadedId, [facturasNoComparadoId], [facturasNoProcesadoId]);
     }
 
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparando' });
     const compareResult = await compareFacturaWithAlbaranes({
       facturaAnalysisText: analysisResult?.analysis || '',
       rootFolderName: 'Facturas'
     });
+    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'comparado' });
 
     if (facturasDocumentosId && uploadedId) {
       const shouldMoveFactura = compareResult?.ok
@@ -2666,6 +2682,7 @@ async function processBillingAttachmentAsFactura(attachment) {
     }
 
     if (compareResult && !compareResult.ok) {
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'email' });
       await sendEmailNotification(
         `Incongruencias en factura recibida por email: ${attachment?.filename || 'sin nombre'}`,
         [
@@ -2677,6 +2694,7 @@ async function processBillingAttachmentAsFactura(attachment) {
         ].join('\n')
       );
     } else if (compareResult?.ok) {
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'email' });
       const facturaRef = getFacturaReferenceForEmail(
         analysisResult?.analysis || '',
         attachment?.filename || 'XX'
@@ -2687,6 +2705,13 @@ async function processBillingAttachmentAsFactura(attachment) {
         `Se han comparado los albaranes ${albaranesLabel} y todo bien.`
       );
     }
+  } catch (error) {
+    emitToRenderer('queue-event', {
+      type: 'error',
+      id: queueId,
+      message: error?.message || 'Error procesando factura de email'
+    });
+    throw error;
   } finally {
     try {
       if (localPath && fs.existsSync(localPath)) fs.unlinkSync(localPath);

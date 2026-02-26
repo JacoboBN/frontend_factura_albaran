@@ -27,7 +27,28 @@ const billingDifferentActions = document.getElementById('billing-different-actio
 const billingLoginBtn = document.getElementById('billing-login-btn');
 const billingEmailLabel = document.getElementById('billing-email');
 
-const QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
+const DEFAULT_QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
+const STARTUP_QUEUE_STEPS = ['OCR', 'IA', 'Enviando', 'Enviado'];
+const FACTURA_QUEUE_STEPS = ['Subiendo', 'IA', 'Comparando', 'comparado', 'email'];
+
+function resolveQueueSteps({ source = '', docType = '', steps = null } = {}) {
+  if (Array.isArray(steps) && steps.length > 0) {
+    return [...steps];
+  }
+
+  const normalizedSource = String(source || '').toLowerCase();
+  const normalizedDocType = String(docType || '').toLowerCase();
+
+  if (normalizedDocType === 'factura' || normalizedSource === 'billing-email') {
+    return [...FACTURA_QUEUE_STEPS];
+  }
+
+  if (normalizedSource === 'startup') {
+    return [...STARTUP_QUEUE_STEPS];
+  }
+
+  return [...DEFAULT_QUEUE_STEPS];
+}
 
 const RENDERER_LOG_PREFIX = '[Frontend-User]';
 
@@ -541,7 +562,7 @@ async function uploadFilesToFolder(parentFolderName) {
       for (const p of filePaths) {
         const fileName = pathBasename(p);
         const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        initQueueItem(queueId, fileName);
+        initQueueItem(queueId, fileName, { docType });
 
         try {
           updateQueueStep(queueId, 'Subiendo');
@@ -602,7 +623,9 @@ async function uploadFilesToFolder(parentFolderName) {
             });
 
             const analysisText = analysisResult.analysis || analysisResult?.raw?.analysis || '';
-            updateQueueStep(item.queueId, 'Enviando');
+            if (docType !== 'factura') {
+              updateQueueStep(item.queueId, 'Enviando');
+            }
 
             if (noComparadoFolder?.id) {
               await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisText, item.fileName);
@@ -613,10 +636,12 @@ async function uploadFilesToFolder(parentFolderName) {
 
             if (docType === 'factura') {
               try {
+                updateQueueStep(item.queueId, 'Comparando');
                 const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
                   facturaAnalysisText: analysisText,
                   rootFolderName: parentFolderName
                 });
+                updateQueueStep(item.queueId, 'comparado');
 
                 uiLog('log', 'uploadFilesToFolder:factura-compare-result', {
                   fileName: item.fileName,
@@ -624,6 +649,8 @@ async function uploadFilesToFolder(parentFolderName) {
                   issues: compareResult?.issues?.length || 0,
                   matchedAlbaranes: compareResult?.matchedAlbaranes?.length || 0
                 });
+
+                updateQueueStep(item.queueId, 'email');
 
                 if (compareResult && !compareResult.ok) {
                   try {
@@ -642,6 +669,7 @@ async function uploadFilesToFolder(parentFolderName) {
                   } catch (emailError) {
                     console.error('Error enviando email de incongruencias:', emailError);
                     showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
+                    throw emailError;
                   }
                 } else if (compareResult?.ok) {
                   try {
@@ -656,6 +684,7 @@ async function uploadFilesToFolder(parentFolderName) {
                   } catch (emailOkError) {
                     console.error('Error enviando email de validación:', emailOkError);
                     showStatus(`No se pudo enviar email de validación: ${emailOkError.message || emailOkError}`, 'error');
+                    throw emailOkError;
                   }
                 }
 
@@ -688,10 +717,13 @@ async function uploadFilesToFolder(parentFolderName) {
                   error: serializeUiError(compareError)
                 });
                 console.warn('Error comparando factura con albaranes:', compareError);
+                throw compareError;
               }
             }
 
-            updateQueueStep(item.queueId, 'Enviado');
+            if (docType !== 'factura') {
+              updateQueueStep(item.queueId, 'Enviado');
+            }
             const finalLabel = noComparadoFolder?.name
               ? `${parentFolderName}/No comparado`
               : targetLabel;
@@ -1464,7 +1496,11 @@ ipcRenderer.on('queue-event', (event, payload) => {
   });
 
   if (payload.type === 'init') {
-    initQueueItem(payload.id, payload.fileName || 'Archivo');
+    initQueueItem(payload.id, payload.fileName || 'Archivo', {
+      source: payload.source,
+      docType: payload.docType,
+      steps: payload.steps
+    });
     return;
   }
 
@@ -1478,8 +1514,9 @@ ipcRenderer.on('queue-event', (event, payload) => {
   }
 });
 
-function initQueueItem(id, fileName) {
-  uploadQueue.set(id, { fileName, status: 'Pendiente', error: null });
+function initQueueItem(id, fileName, options = {}) {
+  const steps = resolveQueueSteps(options);
+  uploadQueue.set(id, { fileName, status: 'Pendiente', error: null, steps });
   renderQueue();
 }
 
@@ -1511,6 +1548,11 @@ function renderQueue() {
 
   queueList.innerHTML = '';
   Array.from(uploadQueue.entries()).forEach(([id, item]) => {
+    const steps = Array.isArray(item.steps) && item.steps.length > 0
+      ? item.steps
+      : DEFAULT_QUEUE_STEPS;
+    const currentIndex = steps.indexOf(item.status);
+
     const wrapper = document.createElement('div');
     wrapper.className = 'queue-item';
 
@@ -1521,7 +1563,7 @@ function renderQueue() {
     const statusRow = document.createElement('div');
     statusRow.className = 'status-row';
 
-    QUEUE_STEPS.forEach(step => {
+    steps.forEach(step => {
       const stepEl = document.createElement('div');
       stepEl.className = 'queue-step';
       stepEl.textContent = step;
@@ -1530,7 +1572,7 @@ function renderQueue() {
         stepEl.classList.add('error');
       } else if (item.status === step) {
         stepEl.classList.add('active');
-      } else if (QUEUE_STEPS.indexOf(step) < QUEUE_STEPS.indexOf(item.status)) {
+      } else if (currentIndex >= 0 && steps.indexOf(step) < currentIndex) {
         stepEl.classList.add('done');
       }
 
