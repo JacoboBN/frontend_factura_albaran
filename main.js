@@ -1975,6 +1975,9 @@ async function ensureInformesTrackingFile() {
 }
 
 async function readLastProcessedEmailState() {
+  // Proceso de lectura de Ult_email.txt deshabilitado por solicitud.
+  // No se elimina, se deja comentado.
+  /*
   const tracking = await ensureInformesTrackingFile();
   const file = tracking?.file;
 
@@ -2024,6 +2027,9 @@ async function readLastProcessedEmailState() {
     log.warn('No se pudo leer Ult_email.txt:', error?.message || error);
     return { tracking, state: null };
   }
+  */
+
+  return { tracking: null, state: null };
 }
 
 async function writeLastProcessedEmailState(tracking, messageInfo = {}) {
@@ -2874,11 +2880,15 @@ async function runBillingMonitorCycle() {
 }
 
 function startBillingMonitor() {
+  // Proceso de lectura de emails de facturas deshabilitado por solicitud.
+  // No se elimina, se deja comentado.
+  /*
   if (billingMonitorInterval) return;
   billingMonitorInterval = setInterval(() => {
     runBillingMonitorCycle();
   }, BILLING_POLL_INTERVAL_MS);
   runBillingMonitorCycle();
+  */
 }
 
 function stopBillingMonitor() {
