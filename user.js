@@ -330,6 +330,42 @@ function getComparedAlbaranesLabel(compareResult = {}) {
   return normalized.length ? normalized.join(', ') : 'N/A';
 }
 
+function buildDriveFileLink(fileId) {
+  if (!fileId) return null;
+  return `https://drive.google.com/file/d/${fileId}/view`;
+}
+
+function buildIncongruentAlbaranesLinks(compareResult = {}) {
+  const docs = Array.isArray(compareResult?.incongruentAlbaranDocs)
+    ? compareResult.incongruentAlbaranDocs
+    : [];
+  if (docs.length) {
+    return docs.map((doc) => {
+      const num = doc?.albaranNum || 'N/A';
+      const url = doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible';
+      return `- Albarán ${num}: ${url}`;
+    });
+  }
+
+  const nums = Array.isArray(compareResult?.incongruentAlbaranes)
+    ? compareResult.incongruentAlbaranes
+    : [];
+  if (!nums.length) {
+    return ['- No disponible'];
+  }
+
+  return nums.map((num) => `- Albarán ${num}: link no disponible`);
+}
+
+async function getCurrentSessionEmail() {
+  const info = await ipcRenderer.invoke('get-user-info');
+  const email = info?.email || null;
+  if (!email) {
+    throw new Error('No se pudo obtener el email del usuario en sesión');
+  }
+  return email;
+}
+
 async function uploadGeneratedTxtFiles(targetFolderId, analysisText, sourceFileName = null) {
   if (!targetFolderId) return;
   const payload = buildTxtFilesFromAnalysis(analysisText, sourceFileName);
@@ -652,13 +688,23 @@ async function uploadFilesToFolder(parentFolderName) {
 
                 updateQueueStep(item.queueId, 'email');
 
+                const facturaRef = getFacturaReferenceForEmail(analysisText, item.fileName || 'XX');
+                const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+                const recipientEmail = await getCurrentSessionEmail();
+
                 if (compareResult && !compareResult.ok) {
                   try {
+                    const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
+                    const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
                     await ipcRenderer.invoke('send-email', {
-                      to: 'bgoptimizing@gmail.com',
-                      subject: `Incongruencias en factura ${item.fileName}`,
+                      to: recipientEmail,
+                      subject: `Incongruencias en factura ${facturaRef}`,
                       text: [
-                        `Factura: ${item.fileName}`,
+                        `Factura comparada: ${facturaRef}`,
+                        `Albaranes comparados: ${albaranesLabel}`,
+                        `Link factura original: ${facturaDriveLink || 'No disponible'}`,
+                        'Links albaranes con incongruencias:',
+                        ...incongruentAlbaranLinks,
                         compareResult.message || 'Se encontraron incongruencias.',
                         '',
                         'Detalles:',
@@ -673,12 +719,14 @@ async function uploadFilesToFolder(parentFolderName) {
                   }
                 } else if (compareResult?.ok) {
                   try {
-                    const facturaRef = getFacturaReferenceForEmail(analysisText, item.fileName || 'XX');
-                    const albaranesLabel = getComparedAlbaranesLabel(compareResult);
                     await ipcRenderer.invoke('send-email', {
-                      to: 'bgoptimizing@gmail.com',
+                      to: recipientEmail,
                       subject: `Factura ${facturaRef} bien`,
-                      text: `Se han comparado los albaranes ${albaranesLabel} y todo bien.`
+                      text: [
+                        `Factura comparada: ${facturaRef}`,
+                        `Albaranes comparados: ${albaranesLabel}`,
+                        'Se han comparado correctamente y todo bien.'
+                      ].join('\n')
                     });
                     showStatus(`Email de validación enviado para ${item.fileName}`, 'success');
                   } catch (emailOkError) {

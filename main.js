@@ -11,7 +11,6 @@ const { spawn } = require('child_process');
 const WATCH_SUBFOLDERS = ['Albaranes', 'Facturas'];
 const WATCHED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.txt'];
 const BILLING_EMAIL_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
-const EMAIL_RECIPIENT = 'bgoptimizing@gmail.com';
 const BILLING_POLL_INTERVAL_MS = 30000;
 const BILLING_PROCESS_DELAY_MS = 3000;
 const REPORTS_FOLDER_NAME = 'Informes - No tocar';
@@ -319,6 +318,11 @@ function getComparedAlbaranesLabel(compareResult = {}) {
     .filter(Boolean);
 
   return normalized.length ? normalized.join(', ') : 'N/A';
+}
+
+function buildDriveFileLink(fileId) {
+  if (!fileId) return null;
+  return `https://drive.google.com/file/d/${fileId}/view`;
 }
 
 function aggregateArticles(lines, mode = 'factura') {
@@ -820,9 +824,17 @@ async function sendEmailNotification(subject, text) {
     throw new Error('Sesión requerida para enviar email');
   }
 
+  const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, {
+    sessionId
+  }, { retries: 1 });
+  const recipientEmail = verifyResp?.data?.email || null;
+  if (!recipientEmail) {
+    throw new Error('No se pudo obtener el email del usuario en sesión para enviar notificación');
+  }
+
   await postWithRetry(`${BACKEND_URL}/email/send`, {
     sessionId,
-    to: EMAIL_RECIPIENT,
+    to: recipientEmail,
     subject,
     text
   });
@@ -2230,7 +2242,15 @@ async function downloadDriveFileToString(fileMeta) {
 async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName }) {
   const parsed = parseFacturaAnalysis(facturaAnalysisText);
   if (!parsed || !parsed.albaranNumbers.length) {
-    return { ok: true, message: 'No se detectaron albaranes en la factura.', issues: [], matchedAlbaranes: [], expectedAlbaranes: [] };
+    return {
+      ok: true,
+      message: 'No se detectaron albaranes en la factura.',
+      issues: [],
+      matchedAlbaranes: [],
+      expectedAlbaranes: [],
+      incongruentAlbaranes: [],
+      incongruentAlbaranDocs: []
+    };
   }
 
   const albaranesRoot = await getDriveFolderByName(null, 'Albaranes');
@@ -2257,8 +2277,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
   const overallIssues = [];
   const matchedAlbaranes = [];
+  const incongruentAlbaranes = [];
+  const incongruentAlbaranDocs = [];
 
   for (const albaranNum of parsed.albaranNumbers) {
+    let sourceFile = null;
     const expectedName = `${albaranNum}Alb.txt`.toLowerCase();
     const albaranFiles = await findDriveFileInFolder(noComparadoFolder.id, expectedName);
     const albaranTxt = albaranFiles.find(file => (file.name || '').toLowerCase() === expectedName)
@@ -2267,6 +2290,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
     if (!albaranTxt) {
       overallIssues.push(`No se encontró .txt del albarán ${albaranNum} en No comparado.`);
+      incongruentAlbaranes.push(albaranNum);
       continue;
     }
 
@@ -2276,7 +2300,14 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
     if (!facturaLinesForAlbaran.length) {
       overallIssues.push(`No hay artículos de la factura para el albarán ${albaranNum}.`);
+      incongruentAlbaranes.push(albaranNum);
       continue;
+    }
+
+    const sourceFileName = albaranLines.find(item => item?.source_file)?.source_file;
+    if (sourceFileName) {
+      const sourceFiles = await findDriveFileInFolder(noComparadoFolder.id, sourceFileName);
+      sourceFile = sourceFiles.find(file => (file.name || '').toLowerCase() === sourceFileName.toLowerCase()) || null;
     }
 
     const facturaMap = aggregateArticles(facturaLinesForAlbaran, 'factura');
@@ -2284,6 +2315,15 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     const issues = compareArticleMaps(facturaMap, albaranMap);
     if (issues.length) {
       overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
+      incongruentAlbaranes.push(albaranNum);
+      if (sourceFile?.id) {
+        incongruentAlbaranDocs.push({
+          albaranNum,
+          fileId: sourceFile.id,
+          fileName: sourceFile.name || sourceFileName || null,
+          url: buildDriveFileLink(sourceFile.id)
+        });
+      }
     }
 
     try {
@@ -2301,7 +2341,15 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   }
 
   if (!overallIssues.length) {
-    return { ok: true, message: 'No se encontraron incongruencias.', issues: [], matchedAlbaranes, expectedAlbaranes: parsed.albaranNumbers };
+    return {
+      ok: true,
+      message: 'No se encontraron incongruencias.',
+      issues: [],
+      matchedAlbaranes,
+      expectedAlbaranes: parsed.albaranNumbers,
+      incongruentAlbaranes: [],
+      incongruentAlbaranDocs: []
+    };
   }
 
   return {
@@ -2309,7 +2357,9 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     message: `Incongruencias encontradas en ${overallIssues.length} línea(s).`,
     issues: overallIssues,
     matchedAlbaranes,
-    expectedAlbaranes: parsed.albaranNumbers
+    expectedAlbaranes: parsed.albaranNumbers,
+    incongruentAlbaranes: [...new Set(incongruentAlbaranes)],
+    incongruentAlbaranDocs
   };
 }
 
@@ -2689,10 +2739,25 @@ async function processBillingAttachmentAsFactura(attachment) {
 
     if (compareResult && !compareResult.ok) {
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'email' });
+      const facturaRef = getFacturaReferenceForEmail(
+        analysisResult?.analysis || '',
+        attachment?.filename || 'XX'
+      );
+      const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+      const facturaDriveLink = buildDriveFileLink(uploadedId);
+      const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
+        ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'}: ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
+        : (Array.isArray(compareResult?.incongruentAlbaranes) && compareResult.incongruentAlbaranes.length
+          ? compareResult.incongruentAlbaranes.map((num) => `- Albarán ${num}: link no disponible`)
+          : ['- No disponible']);
       await sendEmailNotification(
-        `Incongruencias en factura recibida por email: ${attachment?.filename || 'sin nombre'}`,
+        `Incongruencias en factura ${facturaRef}`,
         [
-          `Archivo: ${attachment?.filename || 'N/A'}`,
+          `Factura comparada: ${facturaRef}`,
+          `Albaranes comparados: ${albaranesLabel}`,
+          `Link factura original: ${facturaDriveLink || 'No disponible'}`,
+          'Links albaranes con incongruencias:',
+          ...incongruentAlbaranLinks,
           compareResult.message || 'Se encontraron incongruencias.',
           '',
           'Detalles:',
@@ -2708,7 +2773,11 @@ async function processBillingAttachmentAsFactura(attachment) {
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       await sendEmailNotification(
         `Factura ${facturaRef} bien`,
-        `Se han comparado los albaranes ${albaranesLabel} y todo bien.`
+        [
+          `Factura comparada: ${facturaRef}`,
+          `Albaranes comparados: ${albaranesLabel}`,
+          'Se han comparado correctamente y todo bien.'
+        ].join('\n')
       );
     }
   } catch (error) {
