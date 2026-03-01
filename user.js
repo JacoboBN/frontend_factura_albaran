@@ -555,10 +555,12 @@ async function checkSession({ forceBillingSetup = false } = {}) {
 // Nota: el login se gestiona en user.html. Esta página solo muestra la UI principal.
 
 // Subir archivo a carpeta específica (albaranes o facturas) dentro de "No procesado"
-async function uploadFilesToFolder(parentFolderName) {
+async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
   uiLog('log', 'uploadFilesToFolder:start', { parentFolderName });
   try {
-    const filePaths = await ipcRenderer.invoke('select-file');
+    const filePaths = (Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0)
+      ? selectedFilePaths
+      : await ipcRenderer.invoke('select-file');
     uiLog('log', 'uploadFilesToFolder:selected-files', { count: filePaths?.length || 0 });
 
     if (filePaths && filePaths.length > 0) {
@@ -1430,15 +1432,20 @@ menuButtons.forEach(button => {
       return;
     }
     if (action === 'upload-albaran') {
-      await uploadFilesToFolder('Albaranes', true);
+      await uploadFilesToFolder('Albaranes');
       return;
     }
     if (action === 'upload-factura') {
-      await uploadFilesToFolder('Facturas', true);
+      await uploadFilesToFolder('Facturas');
       return;
     }
   });
 });
+
+const uploadAlbaranBtn = Array.from(menuButtons).find(btn => btn.dataset.action === 'upload-albaran');
+const uploadFacturaBtn = Array.from(menuButtons).find(btn => btn.dataset.action === 'upload-factura');
+setupUploadDropZone(uploadAlbaranBtn, 'Albaranes');
+setupUploadDropZone(uploadFacturaBtn, 'Facturas');
 
 // Enlazar tarjetas principales
 tileButtons.forEach(tile => {
@@ -1465,6 +1472,53 @@ tileButtons.forEach(tile => {
 
 function pathBasename(p) {
   try { return p.split(/[\\/]/).pop(); } catch (e) { return p; }
+}
+
+function extractFilePathsFromDataTransfer(dataTransfer) {
+  if (!dataTransfer || !dataTransfer.files) return [];
+  return Array.from(dataTransfer.files)
+    .map(file => file?.path)
+    .filter(Boolean);
+}
+
+function setupUploadDropZone(button, parentFolderName) {
+  if (!button) return;
+
+  const preventDefaults = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  button.addEventListener('dragenter', (event) => {
+    preventDefaults(event);
+    button.classList.add('drag-over');
+  });
+
+  button.addEventListener('dragover', (event) => {
+    preventDefaults(event);
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+    button.classList.add('drag-over');
+  });
+
+  button.addEventListener('dragleave', (event) => {
+    preventDefaults(event);
+    button.classList.remove('drag-over');
+  });
+
+  button.addEventListener('drop', async (event) => {
+    preventDefaults(event);
+    button.classList.remove('drag-over');
+
+    const droppedFilePaths = extractFilePathsFromDataTransfer(event.dataTransfer);
+    if (!droppedFilePaths.length) {
+      showStatus('No se detectaron archivos válidos para subir.', 'error');
+      return;
+    }
+
+    await uploadFilesToFolder(parentFolderName, droppedFilePaths);
+  });
 }
 
 function formatBytes(bytes) {
