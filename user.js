@@ -26,10 +26,15 @@ const billingDifferentBtn = document.getElementById('billing-different-btn');
 const billingDifferentActions = document.getElementById('billing-different-actions');
 const billingLoginBtn = document.getElementById('billing-login-btn');
 const billingEmailLabel = document.getElementById('billing-email');
+const uploadDropModal = document.getElementById('upload-drop-modal');
+const uploadDropZone = document.getElementById('upload-drop-zone');
+const uploadDropClose = document.getElementById('upload-drop-close');
+const uploadDropTitle = document.getElementById('upload-drop-title');
 
 const DEFAULT_QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
 const STARTUP_QUEUE_STEPS = ['OCR', 'IA', 'Enviando', 'Enviado'];
 const FACTURA_QUEUE_STEPS = ['Subiendo', 'IA', 'Comparando', 'comparado', 'email'];
+let currentUploadTargetFolder = null;
 
 function resolveQueueSteps({ source = '', docType = '', steps = null } = {}) {
   if (Array.isArray(steps) && steps.length > 0) {
@@ -1432,20 +1437,15 @@ menuButtons.forEach(button => {
       return;
     }
     if (action === 'upload-albaran') {
-      await uploadFilesToFolder('Albaranes');
+      openUploadDropModal('Albaranes');
       return;
     }
     if (action === 'upload-factura') {
-      await uploadFilesToFolder('Facturas');
+      openUploadDropModal('Facturas');
       return;
     }
   });
 });
-
-const uploadAlbaranBtn = Array.from(menuButtons).find(btn => btn.dataset.action === 'upload-albaran');
-const uploadFacturaBtn = Array.from(menuButtons).find(btn => btn.dataset.action === 'upload-factura');
-setupUploadDropZone(uploadAlbaranBtn, 'Albaranes');
-setupUploadDropZone(uploadFacturaBtn, 'Facturas');
 
 // Enlazar tarjetas principales
 tileButtons.forEach(tile => {
@@ -1481,35 +1481,34 @@ function extractFilePathsFromDataTransfer(dataTransfer) {
     .filter(Boolean);
 }
 
-function setupUploadDropZone(button, parentFolderName) {
-  if (!button) return;
-
+function bindDropHandlers(element, onDrop) {
+  if (!element) return;
   const preventDefaults = (event) => {
     event.preventDefault();
     event.stopPropagation();
   };
 
-  button.addEventListener('dragenter', (event) => {
+  element.addEventListener('dragenter', (event) => {
     preventDefaults(event);
-    button.classList.add('drag-over');
+    element.classList.add('drag-over');
   });
 
-  button.addEventListener('dragover', (event) => {
+  element.addEventListener('dragover', (event) => {
     preventDefaults(event);
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = 'copy';
     }
-    button.classList.add('drag-over');
+    element.classList.add('drag-over');
   });
 
-  button.addEventListener('dragleave', (event) => {
+  element.addEventListener('dragleave', (event) => {
     preventDefaults(event);
-    button.classList.remove('drag-over');
+    element.classList.remove('drag-over');
   });
 
-  button.addEventListener('drop', async (event) => {
+  element.addEventListener('drop', async (event) => {
     preventDefaults(event);
-    button.classList.remove('drag-over');
+    element.classList.remove('drag-over');
 
     const droppedFilePaths = extractFilePathsFromDataTransfer(event.dataTransfer);
     if (!droppedFilePaths.length) {
@@ -1517,7 +1516,63 @@ function setupUploadDropZone(button, parentFolderName) {
       return;
     }
 
-    await uploadFilesToFolder(parentFolderName, droppedFilePaths);
+    if (typeof onDrop === 'function') {
+      await onDrop(droppedFilePaths);
+    }
+  });
+}
+
+function openUploadDropModal(parentFolderName) {
+  if (!uploadDropModal || !uploadDropZone) {
+    uploadFilesToFolder(parentFolderName);
+    return;
+  }
+
+  currentUploadTargetFolder = parentFolderName;
+  if (uploadDropTitle) {
+    uploadDropTitle.textContent = `Subir ${parentFolderName === 'Facturas' ? 'Factura' : 'Albarán'}`;
+  }
+  uploadDropZone.classList.remove('drag-over');
+  uploadDropModal.classList.add('active');
+}
+
+function closeUploadDropModal() {
+  if (!uploadDropModal) return;
+  uploadDropModal.classList.remove('active');
+  currentUploadTargetFolder = null;
+}
+
+if (uploadDropClose) {
+  uploadDropClose.addEventListener('click', closeUploadDropModal);
+}
+
+if (uploadDropModal) {
+  uploadDropModal.addEventListener('click', (event) => {
+    if (event.target === uploadDropModal) {
+      closeUploadDropModal();
+    }
+  });
+}
+
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && uploadDropModal?.classList.contains('active')) {
+    closeUploadDropModal();
+  }
+});
+
+if (uploadDropZone) {
+  uploadDropZone.addEventListener('click', async () => {
+    const target = currentUploadTargetFolder;
+    if (!target) return;
+    closeUploadDropModal();
+    await uploadFilesToFolder(target);
+  });
+
+  bindDropHandlers(uploadDropZone, async (droppedFilePaths) => {
+    const target = currentUploadTargetFolder;
+    if (!target) return;
+    closeUploadDropModal();
+    await uploadFilesToFolder(target, droppedFilePaths);
   });
 }
 

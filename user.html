@@ -503,6 +503,86 @@
       color: #555;
     }
 
+    .upload-drop-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 15, 15, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .upload-drop-modal.active {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .upload-drop-card {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 20px;
+      width: min(520px, calc(100vw - 32px));
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.25);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .upload-drop-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .upload-drop-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1f1f1f;
+    }
+
+    .upload-drop-close {
+      border: none;
+      background: transparent;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      color: #555;
+    }
+
+    .upload-drop-zone {
+      border: 2px dashed #9ab7d8;
+      border-radius: 14px;
+      min-height: 180px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      color: #35506b;
+      font-size: 20px;
+      font-weight: 600;
+      background: #f7fbff;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+
+    .upload-drop-zone.drag-over {
+      border-color: #007bff;
+      background: #eaf4ff;
+      color: #0b4a88;
+    }
+
+    .upload-drop-hint {
+      font-size: 13px;
+      color: #666;
+      text-align: center;
+    }
+
     @keyframes spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
@@ -519,6 +599,17 @@
         <div class="startup-overlay-message" id="startup-overlay-message">
           Preparando la sincronización con Drive.
         </div>
+      </div>
+    </div>
+
+    <div class="upload-drop-modal" id="upload-drop-modal">
+      <div class="upload-drop-card">
+        <div class="upload-drop-header">
+          <div class="upload-drop-title" id="upload-drop-title">Subir archivo</div>
+          <button class="upload-drop-close" id="upload-drop-close" aria-label="Cerrar">×</button>
+        </div>
+        <div class="upload-drop-zone" id="upload-drop-zone">Drop here or click.</div>
+        <div class="upload-drop-hint">Puedes arrastrar archivos o hacer click para seleccionarlos.</div>
       </div>
     </div>
 
