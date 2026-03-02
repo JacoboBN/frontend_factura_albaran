@@ -325,6 +325,39 @@ function buildDriveFileLink(fileId) {
   return `https://drive.google.com/file/d/${fileId}/view`;
 }
 
+function buildCongruentAlbaranesSummary(compareResult = {}) {
+  const docs = Array.isArray(compareResult?.congruentAlbaranDocs)
+    ? compareResult.congruentAlbaranDocs
+    : [];
+
+  if (docs.length) {
+    return docs.map((doc) => {
+      const num = doc?.albaranNum || 'N/A';
+      const fileName = doc?.fileName || 'Nombre no disponible';
+      return `- Albarán ${num}: ${fileName}`;
+    });
+  }
+
+  const matched = Array.isArray(compareResult?.matchedAlbaranes)
+    ? compareResult.matchedAlbaranes
+    : [];
+  const incongruent = new Set(
+    (Array.isArray(compareResult?.incongruentAlbaranes) ? compareResult.incongruentAlbaranes : [])
+      .map((num) => String(num || '').trim())
+      .filter(Boolean)
+  );
+
+  const congruentNums = matched
+    .map((num) => String(num || '').trim())
+    .filter((num) => num && !incongruent.has(num));
+
+  if (!congruentNums.length) {
+    return ['- No disponible'];
+  }
+
+  return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible`);
+}
+
 function aggregateArticles(lines, mode = 'factura') {
   const map = new Map();
   lines.forEach(item => {
@@ -2249,7 +2282,8 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       matchedAlbaranes: [],
       expectedAlbaranes: [],
       incongruentAlbaranes: [],
-      incongruentAlbaranDocs: []
+      incongruentAlbaranDocs: [],
+      congruentAlbaranDocs: []
     };
   }
 
@@ -2279,6 +2313,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   const matchedAlbaranes = [];
   const incongruentAlbaranes = [];
   const incongruentAlbaranDocs = [];
+  const congruentAlbaranDocs = [];
 
   for (const albaranNum of parsed.albaranNumbers) {
     let sourceFile = null;
@@ -2316,14 +2351,19 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     if (issues.length) {
       overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
       incongruentAlbaranes.push(albaranNum);
-      if (sourceFile?.id) {
-        incongruentAlbaranDocs.push({
-          albaranNum,
-          fileId: sourceFile.id,
-          fileName: sourceFile.name || sourceFileName || null,
-          url: buildDriveFileLink(sourceFile.id)
-        });
-      }
+      incongruentAlbaranDocs.push({
+        albaranNum,
+        fileId: sourceFile?.id || null,
+        fileName: sourceFile?.name || sourceFileName || null,
+        url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+      });
+    } else {
+      congruentAlbaranDocs.push({
+        albaranNum,
+        fileId: sourceFile?.id || null,
+        fileName: sourceFile?.name || sourceFileName || null,
+        url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+      });
     }
 
     try {
@@ -2348,7 +2388,8 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       matchedAlbaranes,
       expectedAlbaranes: parsed.albaranNumbers,
       incongruentAlbaranes: [],
-      incongruentAlbaranDocs: []
+      incongruentAlbaranDocs: [],
+      congruentAlbaranDocs
     };
   }
 
@@ -2359,7 +2400,8 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     matchedAlbaranes,
     expectedAlbaranes: parsed.albaranNumbers,
     incongruentAlbaranes: [...new Set(incongruentAlbaranes)],
-    incongruentAlbaranDocs
+    incongruentAlbaranDocs,
+    congruentAlbaranDocs
   };
 }
 
@@ -2750,6 +2792,7 @@ async function processBillingAttachmentAsFactura(attachment) {
         : (Array.isArray(compareResult?.incongruentAlbaranes) && compareResult.incongruentAlbaranes.length
           ? compareResult.incongruentAlbaranes.map((num) => `- Albarán ${num}: link no disponible`)
           : ['- No disponible']);
+      const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
       await sendEmailNotification(
         `Incongruencias en factura ${facturaRef}`,
         [
@@ -2758,6 +2801,9 @@ async function processBillingAttachmentAsFactura(attachment) {
           `Link factura original: ${facturaDriveLink || 'No disponible'}`,
           'Links albaranes con incongruencias:',
           ...incongruentAlbaranLinks,
+          '',
+          'Albaranes correctos (número y nombre guardado):',
+          ...congruentAlbaranSummary,
           compareResult.message || 'Se encontraron incongruencias.',
           '',
           'Detalles:',

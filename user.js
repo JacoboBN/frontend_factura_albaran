@@ -362,6 +362,39 @@ function buildIncongruentAlbaranesLinks(compareResult = {}) {
   return nums.map((num) => `- Albarán ${num}: link no disponible`);
 }
 
+function buildCongruentAlbaranesSummary(compareResult = {}) {
+  const docs = Array.isArray(compareResult?.congruentAlbaranDocs)
+    ? compareResult.congruentAlbaranDocs
+    : [];
+
+  if (docs.length) {
+    return docs.map((doc) => {
+      const num = doc?.albaranNum || 'N/A';
+      const fileName = doc?.fileName || 'Nombre no disponible';
+      return `- Albarán ${num}: ${fileName}`;
+    });
+  }
+
+  const matched = Array.isArray(compareResult?.matchedAlbaranes)
+    ? compareResult.matchedAlbaranes
+    : [];
+  const incongruent = new Set(
+    (Array.isArray(compareResult?.incongruentAlbaranes) ? compareResult.incongruentAlbaranes : [])
+      .map((num) => String(num || '').trim())
+      .filter(Boolean)
+  );
+
+  const congruentNums = matched
+    .map((num) => String(num || '').trim())
+    .filter((num) => num && !incongruent.has(num));
+
+  if (!congruentNums.length) {
+    return ['- No disponible'];
+  }
+
+  return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible`);
+}
+
 async function getCurrentSessionEmail() {
   const info = await ipcRenderer.invoke('get-user-info');
   const email = info?.email || null;
@@ -703,6 +736,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                   try {
                     const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
                     const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
+                    const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
                       subject: `Incongruencias en factura ${facturaRef}`,
@@ -712,6 +746,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         `Link factura original: ${facturaDriveLink || 'No disponible'}`,
                         'Links albaranes con incongruencias:',
                         ...incongruentAlbaranLinks,
+                        '',
+                        'Albaranes correctos (número y nombre guardado):',
+                        ...congruentAlbaranSummary,
                         compareResult.message || 'Se encontraron incongruencias.',
                         '',
                         'Detalles:',
