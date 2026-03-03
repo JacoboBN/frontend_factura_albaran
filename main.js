@@ -337,6 +337,42 @@ function buildModelConfidenceEmailLines(analysisText) {
   return lines;
 }
 
+function extractExtractionWarningsFromAnalysis(analysisText) {
+  if (!analysisText) return [];
+  const marker = '=== EXTRACTION WARNINGS (JSON) ===';
+  const text = analysisText.toString();
+  if (!text.includes(marker)) return [];
+
+  const afterMarker = text.split(marker)[1] || '';
+  const firstLine = afterMarker
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean);
+
+  if (!firstLine) return [];
+
+  try {
+    const parsed = JSON.parse(firstLine);
+    return Array.isArray(parsed)
+      ? parsed.map(item => String(item || '').trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function buildExtractionWarningsEmailLines(analysisText) {
+  const warnings = extractExtractionWarningsFromAnalysis(analysisText);
+  if (!warnings.length) {
+    return ['Warnings de extracción: ninguno'];
+  }
+
+  return [
+    `Warnings de extracción (${warnings.length}):`,
+    ...warnings.map(w => `- ${w}`)
+  ];
+}
+
 function getComparedAlbaranesLabel(compareResult = {}) {
   const fromExpected = Array.isArray(compareResult?.expectedAlbaranes)
     ? compareResult.expectedAlbaranes
@@ -2820,6 +2856,7 @@ async function processBillingAttachmentAsFactura(attachment) {
       );
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
+      const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
       const facturaDriveLink = buildDriveFileLink(uploadedId);
       const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
         ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'}: ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
@@ -2833,6 +2870,7 @@ async function processBillingAttachmentAsFactura(attachment) {
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
           ...confidenceLines,
+          ...extractionWarningsLines,
           `Link factura original: ${facturaDriveLink || 'No disponible'}`,
           'Links albaranes con incongruencias:',
           ...incongruentAlbaranLinks,
@@ -2853,12 +2891,14 @@ async function processBillingAttachmentAsFactura(attachment) {
       );
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
+      const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
       await sendEmailNotification(
         `Factura ${facturaRef} bien`,
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
           ...confidenceLines,
+          ...extractionWarningsLines,
           'Se han comparado correctamente y todo bien.'
         ].join('\n')
       );
