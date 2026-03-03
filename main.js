@@ -124,12 +124,12 @@ ipcMain.handle = (channel, listener) => {
 axios.interceptors.request.use(
   (config) => {
     const method = (config.method || 'get').toUpperCase();
-    mainLog('info', 'HTTP request:start', {
-      method,
-      url: config.url,
-      timeout: config.timeout,
-      hasData: Boolean(config.data)
-    });
+    // mainLog('info', 'HTTP request:start', {
+    //   method,
+    //   url: config.url,
+    //   timeout: config.timeout,
+    //   hasData: Boolean(config.data)
+    // });
     config.metadata = { startedAt: Date.now() };
     return config;
   },
