@@ -319,6 +319,53 @@ function getFacturaReferenceForEmail(analysisText, fallback = 'XX') {
   return sanitizeFileName(fallbackBase || 'XX');
 }
 
+function normalizeConfidenceToPercent(rawConfidence) {
+  const value = Number(rawConfidence);
+  if (!Number.isFinite(value)) return null;
+
+  if (value >= 0 && value <= 1) {
+    return value * 100;
+  }
+
+  if (value >= 0 && value <= 100) {
+    return value;
+  }
+
+  return null;
+}
+
+function buildModelConfidenceEmailLines(analysisText) {
+  let confidenceRaw = null;
+
+  try {
+    const sections = extractAnalysisSections(analysisText);
+    if (sections?.isFactura && sections?.resumenRaw) {
+      const resumenLine = sections.resumenRaw.split(/\r?\n/).find(line => line.trim());
+      if (resumenLine) {
+        const resumenObj = JSON.parse(resumenLine);
+        confidenceRaw = resumenObj?.confidence;
+      }
+    }
+  } catch (e) {
+    confidenceRaw = null;
+  }
+
+  const confidencePercent = normalizeConfidenceToPercent(confidenceRaw);
+
+  if (confidencePercent === null) {
+    return ['Seguridad del modelo: No disponible'];
+  }
+
+  const roundedPercent = Math.round(confidencePercent * 10) / 10;
+  const lines = [`Seguridad del modelo: ${roundedPercent}%`];
+
+  if (confidencePercent < 70) {
+    lines.push('⚠️ CUIDADO: baja seguridad del modelo (< 70%).');
+  }
+
+  return lines;
+}
+
 function getComparedAlbaranesLabel(compareResult = {}) {
   const fromExpected = Array.isArray(compareResult?.expectedAlbaranes)
     ? compareResult.expectedAlbaranes
@@ -730,6 +777,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
                 const facturaRef = getFacturaReferenceForEmail(analysisText, item.fileName || 'XX');
                 const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+                const confidenceLines = buildModelConfidenceEmailLines(analysisText);
                 const recipientEmail = await getCurrentSessionEmail();
 
                 if (compareResult && !compareResult.ok) {
@@ -743,6 +791,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       text: [
                         `Factura comparada: ${facturaRef}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        ...confidenceLines,
                         `Link factura original: ${facturaDriveLink || 'No disponible'}`,
                         'Links albaranes con incongruencias:',
                         ...incongruentAlbaranLinks,
@@ -769,6 +818,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       text: [
                         `Factura comparada: ${facturaRef}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        ...confidenceLines,
                         'Se han comparado correctamente y todo bien.'
                       ].join('\n')
                     });

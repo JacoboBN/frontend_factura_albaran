@@ -304,6 +304,39 @@ function getFacturaReferenceForEmail(analysisText, fallback = 'XX') {
   return sanitizeFileName(fallbackBase || 'XX');
 }
 
+function normalizeConfidenceToPercent(rawConfidence) {
+  const value = Number(rawConfidence);
+  if (!Number.isFinite(value)) return null;
+
+  if (value >= 0 && value <= 1) {
+    return value * 100;
+  }
+
+  if (value >= 0 && value <= 100) {
+    return value;
+  }
+
+  return null;
+}
+
+function buildModelConfidenceEmailLines(analysisText) {
+  const parsed = parseFacturaAnalysis(analysisText);
+  const confidencePercent = normalizeConfidenceToPercent(parsed?.resumen?.confidence);
+
+  if (confidencePercent === null) {
+    return ['Seguridad del modelo: No disponible'];
+  }
+
+  const roundedPercent = Math.round(confidencePercent * 10) / 10;
+  const lines = [`Seguridad del modelo: ${roundedPercent}%`];
+
+  if (confidencePercent < 70) {
+    lines.push('⚠️ CUIDADO: baja seguridad del modelo (< 70%).');
+  }
+
+  return lines;
+}
+
 function getComparedAlbaranesLabel(compareResult = {}) {
   const fromExpected = Array.isArray(compareResult?.expectedAlbaranes)
     ? compareResult.expectedAlbaranes
@@ -2786,6 +2819,7 @@ async function processBillingAttachmentAsFactura(attachment) {
         attachment?.filename || 'XX'
       );
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+      const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       const facturaDriveLink = buildDriveFileLink(uploadedId);
       const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
         ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'}: ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
@@ -2798,6 +2832,7 @@ async function processBillingAttachmentAsFactura(attachment) {
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
+          ...confidenceLines,
           `Link factura original: ${facturaDriveLink || 'No disponible'}`,
           'Links albaranes con incongruencias:',
           ...incongruentAlbaranLinks,
@@ -2817,11 +2852,13 @@ async function processBillingAttachmentAsFactura(attachment) {
         attachment?.filename || 'XX'
       );
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+      const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       await sendEmailNotification(
         `Factura ${facturaRef} bien`,
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
+          ...confidenceLines,
           'Se han comparado correctamente y todo bien.'
         ].join('\n')
       );
