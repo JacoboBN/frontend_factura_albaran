@@ -43,8 +43,6 @@ const LEGACY_ANALYZE_TEXT_ENDPOINTS = {
   factura: '/analyze/document/factura'
 };
 
-let batchAnalyzeEndpointUnavailable = false;
-
 const MAIN_LOG_PREFIX = '[Frontend-Main]';
 
 function serializeError(error) {
@@ -806,118 +804,24 @@ async function moveDriveFilesWithBackoff(moves = [], options = {}) {
 }
 
 async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
-  const sessionId = store.get('sessionId');
-  if (!sessionId) {
-    throw new Error('Sesión requerida para analizar documentos');
-  }
-
   const validItems = (Array.isArray(items) ? items : []).filter(item => item?.filePath);
   if (!validItems.length) return [];
 
   mainLog('info', 'analyzeFilesWithBackendIABatch:start', {
     docType,
-    totalItems: validItems.length,
-    batchEndpointUnavailable: batchAnalyzeEndpointUnavailable
+    totalItems: validItems.length
   });
 
-  if (validItems.length === 1) {
-    const one = validItems[0];
-    const single = await analyzeFileWithBackendIA(one.filePath, one.mimeType || '', one.originalName || '', docType);
-    return [{ success: true, analysis: single?.analysis || '', raw: single }];
+  const results = [];
+  for (const item of validItems) {
+    try {
+      const single = await analyzeFileWithBackendIA(item.filePath, item.mimeType || '', item.originalName || '', docType);
+      results.push({ success: true, analysis: single?.analysis || '', raw: single });
+    } catch (error) {
+      results.push({ success: false, analysis: '', error: error.message || String(error) });
+    }
   }
-
-  // Si ya detectamos que el backend desplegado no expone el endpoint batch,
-  // evitamos volver a intentarlo para no generar ruido ni latencia extra.
-  if (batchAnalyzeEndpointUnavailable) {
-    const fallbackResults = [];
-    for (const item of validItems) {
-      try {
-        const single = await analyzeFileWithBackendIA(item.filePath, item.mimeType || '', item.originalName || '', docType);
-        fallbackResults.push({ success: true, analysis: single?.analysis || '', raw: single });
-      } catch (error) {
-        fallbackResults.push({ success: false, analysis: '', error: error.message || String(error) });
-      }
-    }
-    return fallbackResults;
-  }
-
-  try {
-    const formData = new FormData();
-    formData.append('sessionId', sessionId);
-    formData.append('docType', normalizeDocumentType(docType));
-
-    validItems.forEach((item) => {
-      formData.append('files', fs.createReadStream(item.filePath), {
-        filename: item.originalName || path.basename(item.filePath),
-        contentType: item.mimeType || undefined
-      });
-    });
-
-    const response = await postWithRetry(`${BACKEND_URL}/analyze/documents/batch/file`, formData, {
-      timeout: 60000, // Timeout corto: solo espera el job_id, no el procesamiento completo
-      retries: 1,
-      delayMs: 1200,
-      maxDelayMs: 12000,
-      backoffFactor: 2,
-      axiosOptions: {
-        headers: {
-          ...formData.getHeaders()
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
-      }
-    });
-
-    // Flujo asíncrono (nuevo): el backend devuelve { job_id } inmediatamente
-    let responseData = response?.data;
-    if (responseData?.job_id) {
-      mainLog('info', 'analyzeFilesWithBackendIABatch:job-submitted', {
-        jobId: responseData.job_id,
-        filesCount: validItems.length
-      });
-      responseData = await pollJobResult(responseData.job_id);
-      mainLog('info', 'analyzeFilesWithBackendIABatch:job-done', {
-        jobId: response.data.job_id,
-        hasResults: Boolean(responseData?.results)
-      });
-    }
-
-    const results = Array.isArray(responseData?.results) ? responseData.results : [];
-    if (!results.length) {
-      throw new Error('Batch IA sin resultados');
-    }
-
-    return validItems.map((item, idx) => {
-      const fromApi = results.find(r => Number(r?.index) === idx) || results[idx] || {};
-      return {
-        success: Boolean(fromApi?.success !== false),
-        analysis: fromApi?.analysis || '',
-        raw: fromApi
-      };
-    });
-  } catch (batchError) {
-    const status = batchError?.response?.status;
-    if (status === 404 || status === 405) {
-      batchAnalyzeEndpointUnavailable = true;
-      log.info('Endpoint batch IA no disponible en backend actual; usando fallback individual.');
-    } else {
-      log.warn('Batch IA falló; usando fallback individual:', batchError?.message || batchError);
-    }
-    mainLog('warn', 'analyzeFilesWithBackendIABatch:fallback', {
-      docType,
-      error: serializeError(batchError)
-    });
-    const fallbackResults = [];
-    for (const item of validItems) {
-      try {
-        const single = await analyzeFileWithBackendIA(item.filePath, item.mimeType || '', item.originalName || '', docType);
-        fallbackResults.push({ success: true, analysis: single?.analysis || '', raw: single });
-      } catch (error) {
-        fallbackResults.push({ success: false, analysis: '', error: error.message || String(error) });
-      }
-    }
-    return fallbackResults;
-  }
+  return results;
 }
 
 async function sendEmailNotification(subject, text) {
@@ -2578,105 +2482,24 @@ async function scanNoProcesado(trigger = 'startup') {
     message: `Encontrados ${allFiles.length} nuevos archivos en No procesado.`
   });
 
-  if (allFiles.length > 1) {
-    const prepared = [];
-
-    for (let idx = 0; idx < allFiles.length; idx += 1) {
-      const fileMeta = allFiles[idx];
-      const queueId = `startup-${idx + 1}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const fileName = fileMeta?.name || 'Archivo';
-
-      emitToRenderer('startup-status', {
-        message: `Preparando ${fileName} (${idx + 1}/${allFiles.length})`
-      });
-      emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
-      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
-
-      try {
-        const downloaded = await downloadDriveFileToTemp(fileMeta, fileName);
-        prepared.push({
-          fileMeta,
-          queueId,
-          fileName,
-          localPath: downloaded.localPath,
-          mimeType: downloaded.mimeType,
-          docType: normalizeDocumentType(fileMeta?.sourceRoot)
-        });
-      } catch (error) {
-        emitToRenderer('queue-event', {
-          type: 'error',
-          id: queueId,
-          message: error.message || 'Error descargando archivo'
-        });
-      }
-    }
-
-    const byDocType = new Map();
-    prepared.forEach((item) => {
-      const key = item.docType || 'albaran';
-      if (!byDocType.has(key)) byDocType.set(key, []);
-      byDocType.get(key).push(item);
+  let idx = 0;
+  for (const fileMeta of allFiles) {
+    idx += 1;
+    const queueId = `startup-${idx}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const fileName = fileMeta?.name || 'Archivo';
+    emitToRenderer('startup-status', {
+      message: `Analizando ${fileName} (${idx}/${allFiles.length})`
     });
 
-    for (const [docType, items] of byDocType.entries()) {
-      items.forEach((item) => {
-        emitToRenderer('queue-event', { type: 'step', id: item.queueId, step: 'IA' });
+    try {
+      await processNoProcesadoFileWithEvents(fileMeta, queueId);
+    } catch (error) {
+      emitToRenderer('queue-event', {
+        type: 'error',
+        id: queueId,
+        message: error.message || 'Error desconocido'
       });
-
-      let batchResults = [];
-      try {
-        batchResults = await analyzeFilesWithBackendIABatch(
-          items.map((item) => ({
-            filePath: item.localPath,
-            mimeType: item.mimeType,
-            originalName: item.fileName
-          })),
-          docType
-        );
-      } catch (batchError) {
-        log.warn('Error en batch de IA durante scan inicial:', batchError);
-      }
-
-      for (let idx = 0; idx < items.length; idx += 1) {
-        const item = items[idx];
-        const batchResult = batchResults[idx] || null;
-        try {
-          await processNoProcesadoFileWithEvents(item.fileMeta, item.queueId, {
-            emitQueueInit: false,
-            localPath: item.localPath,
-            mimeType: item.mimeType,
-            analysisResult: batchResult?.success === false ? null : (batchResult?.raw || (batchResult?.analysis ? { success: true, analysis: batchResult.analysis } : null))
-          });
-        } catch (error) {
-          emitToRenderer('queue-event', {
-            type: 'error',
-            id: item.queueId,
-            message: error.message || 'Error desconocido'
-          });
-          log.error('Error procesando archivo en scan inicial (batch):', error);
-        }
-      }
-    }
-  } else {
-    let idx = 0;
-    for (const fileMeta of allFiles) {
-      idx += 1;
-      const queueId = `startup-${idx}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const fileName = fileMeta?.name || 'Archivo';
-      emitToRenderer('startup-status', {
-        message: `Analizando ${fileName} (${idx}/${allFiles.length})`
-      });
-
-      try {
-        await processNoProcesadoFileWithEvents(fileMeta, queueId);
-      } catch (error) {
-        emitToRenderer('queue-event', {
-          type: 'error',
-          id: queueId,
-          message: error.message || 'Error desconocido'
-        });
-        log.error('Error procesando archivo en scan inicial:', error);
-      }
+      log.error('Error procesando archivo en scan inicial:', error);
     }
   }
 
