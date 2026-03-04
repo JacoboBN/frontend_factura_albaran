@@ -543,7 +543,7 @@ function getLegacyAnalyzeTextEndpoint(docType) {
   return `${BACKEND_URL}${endpoint}`;
 }
 
-async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = '', docType = 'albaran') {
+async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = '', docType = 'albaran', postProcess = null) {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
     throw new Error('Sesión requerida para analizar documento');
@@ -560,6 +560,22 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
   try {
     const formData = new FormData();
     formData.append('sessionId', sessionId);
+    const pipeline = postProcess && typeof postProcess === 'object' ? postProcess : null;
+    if (pipeline?.txtFolderId) {
+      formData.append('postProcessTxtFolderId', String(pipeline.txtFolderId));
+    }
+    if (pipeline?.sourceDriveFileId) {
+      formData.append('postProcessSourceDriveFileId', String(pipeline.sourceDriveFileId));
+    }
+    if (pipeline?.sourceDriveFromFolderId) {
+      formData.append('postProcessSourceDriveFromFolderId', String(pipeline.sourceDriveFromFolderId));
+    }
+    if (pipeline?.sourceDriveToFolderId) {
+      formData.append('postProcessSourceDriveToFolderId', String(pipeline.sourceDriveToFolderId));
+    }
+    if (pipeline?.sourceFileName) {
+      formData.append('postProcessSourceFileName', String(pipeline.sourceFileName));
+    }
     formData.append('file', fs.createReadStream(filePath), {
       filename: originalName || path.basename(filePath),
       contentType: mimeType || undefined
@@ -815,7 +831,13 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
   const results = [];
   for (const item of validItems) {
     try {
-      const single = await analyzeFileWithBackendIA(item.filePath, item.mimeType || '', item.originalName || '', docType);
+      const single = await analyzeFileWithBackendIA(
+        item.filePath,
+        item.mimeType || '',
+        item.originalName || '',
+        docType,
+        item.postProcess || null
+      );
       results.push({ success: true, analysis: single?.analysis || '', raw: single });
     } catch (error) {
       results.push({ success: false, analysis: '', error: error.message || String(error) });
@@ -1686,7 +1708,7 @@ async function getOrCreateAlbaranesNoProcesadoFolder(sessionId) {
 // Analyze document with local OCR and AI analysis
 ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalName, docType = 'albaran') => {
   try {
-    return await analyzeFileWithBackendIA(filePath, mimeType, originalName, docType);
+    return await analyzeFileWithBackendIA(filePath, mimeType, originalName, docType, null);
   } catch (error) {
     console.error('Error analyzing document:', error);
     throw new Error(error.response?.data?.error || 'Error al analizar el documento');
@@ -1695,9 +1717,9 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
 
 // Alias de compatibilidad: algunos flujos llaman a 'analyze-file'
 // Mantiene compatibilidad incluso si el backend aún no expone /analyze/document/*/file.
-ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalName = '', docType = 'albaran') => {
+ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalName = '', docType = 'albaran', postProcess = null) => {
   try {
-    return await analyzeFileWithBackendIA(filePath, mimeType, originalName, docType);
+    return await analyzeFileWithBackendIA(filePath, mimeType, originalName, docType, postProcess);
   } catch (error) {
     console.error('Error analizando archivo con IA:', error);
     throw new Error(error.response?.data?.error || 'Error al analizar documento con IA');
@@ -1843,23 +1865,18 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId, options = {})
     if (!analysisResult) {
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
       const docType = normalizeDocumentType(fileMeta?.sourceRoot);
-      analysisResult = await analyzeFileWithBackendIA(localPath, mimeType, fileName, docType);
+      analysisResult = await analyzeFileWithBackendIA(localPath, mimeType, fileName, docType, {
+        txtFolderId: options?.pipeline?.txtFolderId || null,
+        sourceDriveFileId: fileMeta?.id || null,
+        sourceDriveFromFolderId: fileMeta?.noProcesadoId || null,
+        sourceDriveToFolderId: options?.pipeline?.sourceToFolderId || null,
+        sourceFileName: fileName
+      });
     }
 
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
 
     // Sin envío de email: se eliminó notificación por JSON
-
-    try {
-      const rootName = fileMeta.sourceRoot || '';
-      if (rootName) {
-        const noComparado = await getOrCreateNoComparadoFolder(rootName);
-        await uploadGeneratedTxtFiles(noComparado.id, analysisResult.analysis || '', fileName);
-        await moveDriveFileWithBackoff(fileMeta.id, [noComparado.id], fileMeta.noProcesadoId ? [fileMeta.noProcesadoId] : []);
-      }
-    } catch (moveError) {
-      log.warn('No se pudo mover archivo a No comparado:', moveError);
-    }
 
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviado' });
   } finally {
@@ -2492,7 +2509,13 @@ async function scanNoProcesado(trigger = 'startup') {
     });
 
     try {
-      await processNoProcesadoFileWithEvents(fileMeta, queueId);
+      const noComparado = await getOrCreateNoComparadoFolder(fileMeta?.sourceRoot || 'Albaranes');
+      await processNoProcesadoFileWithEvents(fileMeta, queueId, {
+        pipeline: {
+          txtFolderId: noComparado?.id || null,
+          sourceToFolderId: noComparado?.id || null
+        }
+      });
     } catch (error) {
       emitToRenderer('queue-event', {
         type: 'error',
@@ -2616,21 +2639,22 @@ async function processBillingAttachmentAsFactura(attachment) {
   try {
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Subiendo' });
     const uploaded = await uploadLocalFileToDrive(sessionId, localPath, facturasNoProcesadoId);
+    const uploadedId = uploaded?.file?.id || uploaded?.fileId || uploaded?.id;
 
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
     const analysisResult = await analyzeFileWithBackendIA(
       localPath,
       attachment?.mimeType || '',
       attachment?.filename || path.basename(localPath),
-      'factura'
+      'factura',
+      {
+        txtFolderId: facturasNoComparadoId,
+        sourceDriveFileId: uploadedId || null,
+        sourceDriveFromFolderId: facturasNoProcesadoId,
+        sourceDriveToFolderId: facturasNoComparadoId,
+        sourceFileName: attachment?.filename || path.basename(localPath)
+      }
     );
-
-    await uploadGeneratedTxtFiles(facturasNoComparadoId, analysisResult?.analysis || '', attachment?.filename || null);
-
-    const uploadedId = uploaded?.file?.id || uploaded?.fileId || uploaded?.id;
-    if (uploadedId) {
-      await moveDriveFileWithBackoff(uploadedId, [facturasNoComparadoId], [facturasNoProcesadoId]);
-    }
 
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparando' });
     const compareResult = await compareFacturaWithAlbaranes({

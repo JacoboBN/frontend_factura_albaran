@@ -112,7 +112,7 @@ function guessMimeTypeFromPath(filePath = '') {
   return mimeByExt[ext] || '';
 }
 
-async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, docType) {
+async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, docType, postProcess = null) {
   uiLog('log', 'invokeAnalyzeFileWithFallback:start', {
     filePath,
     mimeType,
@@ -120,7 +120,7 @@ async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, d
     docType
   });
   try {
-    const result = await ipcRenderer.invoke('analyze-file', filePath, mimeType, originalName, docType);
+    const result = await ipcRenderer.invoke('analyze-file', filePath, mimeType, originalName, docType, postProcess);
     uiLog('log', 'invokeAnalyzeFileWithFallback:ok', { docType, hasAnalysis: Boolean(result?.analysis) });
     return result;
   } catch (error) {
@@ -170,7 +170,8 @@ async function invokeAnalyzeFilesBatchWithFallback(items = [], docType = 'albara
           item.filePath,
           item.mimeType || '',
           item.originalName || '',
-          docType
+          docType,
+          item.postProcess || null
         );
         fallback.push({ success: true, analysis: single?.analysis || '', raw: single });
       } catch (singleError) {
@@ -757,7 +758,14 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
           preparedItems.map(item => ({
             filePath: item.filePath,
             mimeType: item.mimeType,
-            originalName: item.fileName
+            originalName: item.fileName,
+            postProcess: {
+              txtFolderId: noComparadoFolder?.id || null,
+              sourceDriveFileId: item.uploadedFileId || null,
+              sourceDriveFromFolderId: target?.id || null,
+              sourceDriveToFolderId: noComparadoFolder?.id || null,
+              sourceFileName: item.fileName
+            }
           })),
           docType
         );
@@ -784,13 +792,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
             const analysisText = analysisResult.analysis || analysisResult?.raw?.analysis || '';
             if (docType !== 'factura') {
               updateQueueStep(item.queueId, 'Enviando');
-            }
-
-            if (noComparadoFolder?.id) {
-              await uploadGeneratedTxtFiles(noComparadoFolder.id, analysisText, item.fileName);
-              if (item.uploadedFileId) {
-                await ipcRenderer.invoke('move-file', item.uploadedFileId, [noComparadoFolder.id], [target.id]);
-              }
             }
 
             if (docType === 'factura') {
