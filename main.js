@@ -335,6 +335,62 @@ function buildModelConfidenceEmailLines(analysisText) {
   return lines;
 }
 
+function extractModelConfidenceValue(analysisText) {
+  const parsed = parseFacturaAnalysis(analysisText);
+  const value = Number(parsed?.resumen?.confidence);
+  if (!Number.isFinite(value)) return null;
+  if (value >= 0 && value <= 1) return value;
+  if (value >= 0 && value <= 100) return value / 100;
+  return null;
+}
+
+function getIssueCountByAlbaran(compareResult = {}) {
+  const counts = new Map();
+  const issues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+  let currentAlbaran = null;
+
+  for (const raw of issues) {
+    const line = String(raw || '').trim();
+    const headerMatch = line.match(/^Albar[aá]n\s+(.+?):$/i);
+    if (headerMatch) {
+      currentAlbaran = String(headerMatch[1] || '').trim() || null;
+      if (currentAlbaran && !counts.has(currentAlbaran)) {
+        counts.set(currentAlbaran, 0);
+      }
+      continue;
+    }
+
+    if (currentAlbaran && line.startsWith('-')) {
+      counts.set(currentAlbaran, (counts.get(currentAlbaran) || 0) + 1);
+    }
+  }
+
+  if (!counts.size) {
+    const fallback = Array.isArray(compareResult?.incongruentAlbaranes)
+      ? compareResult.incongruentAlbaranes
+      : [];
+    fallback.forEach((num) => counts.set(String(num || '').trim(), 1));
+  }
+
+  return counts;
+}
+
+function buildCriticalAlertContext(compareResult = {}, analysisText = '') {
+  const confidence = extractModelConfidenceValue(analysisText);
+  const lowConfidence = confidence !== null && confidence < 0.75;
+  const issuesByAlbaran = getIssueCountByAlbaran(compareResult);
+  const severeAlbaranes = Array.from(issuesByAlbaran.entries())
+    .filter(([, issueCount]) => issueCount > 6)
+    .map(([albaranNum]) => albaranNum);
+
+  return {
+    shouldSend: lowConfidence || severeAlbaranes.length > 0,
+    lowConfidence,
+    confidence,
+    severeAlbaranes
+  };
+}
+
 function extractExtractionWarningsFromAnalysis(analysisText) {
   if (!analysisText) return [];
   const marker = '=== EXTRACTION WARNINGS (JSON) ===';
@@ -2704,6 +2760,7 @@ async function processBillingAttachmentAsFactura(attachment) {
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
+      const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
       const facturaDriveLink = buildDriveFileLink(uploadedId);
       const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
         ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'}: ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
@@ -2730,6 +2787,36 @@ async function processBillingAttachmentAsFactura(attachment) {
           ...(compareResult.issues || []).map(issue => `- ${issue}`)
         ].join('\n')
       );
+
+      if (criticalAlert.shouldSend) {
+        const failedAlbaranes = (Array.isArray(compareResult?.incongruentAlbaranes)
+          ? compareResult.incongruentAlbaranes
+          : [])
+          .map(num => String(num || '').trim())
+          .filter(Boolean);
+        const confidenceValue = criticalAlert.confidence;
+        const confidenceLabel = confidenceValue === null
+          ? 'No disponible'
+          : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
+
+        await sendEmailNotification(
+          `ERROR IMPORTANTE (${attachment?.filename || 'archivo'})`,
+          [
+            'Se han encontrado estas incongruencias en este archivo y necesita revisión humana.',
+            '',
+            `Nombre archivo: ${attachment?.filename || 'N/A'}`,
+            `Número de factura: ${facturaRef}`,
+            `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
+            `Confianza IA: ${confidenceLabel}`,
+            `Albaranes con más de 6 incongruencias: ${criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno'}`,
+            `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
+            'Links de albaranes fallados:',
+            ...incongruentAlbaranLinks,
+            '',
+            'Acción requerida: revisión humana.'
+          ].join('\n')
+        );
+      }
     } else if (compareResult?.ok) {
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'email' });
       const facturaRef = getFacturaReferenceForEmail(
@@ -2739,6 +2826,7 @@ async function processBillingAttachmentAsFactura(attachment) {
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
+      const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
       await sendEmailNotification(
         `Factura ${facturaRef} bien`,
         [
@@ -2749,6 +2837,29 @@ async function processBillingAttachmentAsFactura(attachment) {
           'Se han comparado correctamente y todo bien.'
         ].join('\n')
       );
+
+      if (criticalAlert.lowConfidence) {
+        const facturaDriveLink = buildDriveFileLink(uploadedId);
+        const confidenceValue = criticalAlert.confidence;
+        const confidenceLabel = confidenceValue === null
+          ? 'No disponible'
+          : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
+
+        await sendEmailNotification(
+          `ERROR IMPORTANTE (${attachment?.filename || 'archivo'})`,
+          [
+            'Se ha detectado confianza baja de IA y este archivo necesita revisión humana.',
+            '',
+            `Nombre archivo: ${attachment?.filename || 'N/A'}`,
+            `Número de factura: ${facturaRef}`,
+            'Albaranes fallados: N/A',
+            `Confianza IA: ${confidenceLabel}`,
+            `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
+            '',
+            'Acción requerida: revisión humana.'
+          ].join('\n')
+        );
+      }
     }
   } catch (error) {
     emitToRenderer('queue-event', {

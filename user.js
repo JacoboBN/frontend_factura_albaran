@@ -383,6 +383,77 @@ function buildModelConfidenceEmailLines(analysisText) {
   return lines;
 }
 
+function extractModelConfidenceValue(analysisText) {
+  let confidenceRaw = null;
+
+  try {
+    const sections = extractAnalysisSections(analysisText);
+    if (sections?.isFactura && sections?.resumenRaw) {
+      const resumenLine = sections.resumenRaw.split(/\r?\n/).find(line => line.trim());
+      if (resumenLine) {
+        const resumenObj = JSON.parse(resumenLine);
+        confidenceRaw = resumenObj?.confidence;
+      }
+    }
+  } catch (e) {
+    confidenceRaw = null;
+  }
+
+  const value = Number(confidenceRaw);
+  if (!Number.isFinite(value)) return null;
+  if (value >= 0 && value <= 1) return value;
+  if (value >= 0 && value <= 100) return value / 100;
+  return null;
+}
+
+function getIssueCountByAlbaran(compareResult = {}) {
+  const counts = new Map();
+  const issues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+  let currentAlbaran = null;
+
+  for (const raw of issues) {
+    const line = String(raw || '').trim();
+    const matchHeader = line.match(/^Albar[aá]n\s+(.+?):$/i);
+    if (matchHeader) {
+      currentAlbaran = String(matchHeader[1] || '').trim() || null;
+      if (currentAlbaran && !counts.has(currentAlbaran)) {
+        counts.set(currentAlbaran, 0);
+      }
+      continue;
+    }
+
+    if (currentAlbaran && line.startsWith('-')) {
+      counts.set(currentAlbaran, (counts.get(currentAlbaran) || 0) + 1);
+    }
+  }
+
+  if (!counts.size) {
+    const fallback = Array.isArray(compareResult?.incongruentAlbaranes)
+      ? compareResult.incongruentAlbaranes
+      : [];
+    fallback.forEach((num) => counts.set(String(num || '').trim(), 1));
+  }
+
+  return counts;
+}
+
+function buildCriticalAlertContext(compareResult = {}, analysisText = '') {
+  const confidence = extractModelConfidenceValue(analysisText);
+  const lowConfidence = confidence !== null && confidence < 0.75;
+  const issuesByAlbaran = getIssueCountByAlbaran(compareResult);
+  const severeAlbaranes = Array.from(issuesByAlbaran.entries())
+    .filter(([, issueCount]) => issueCount > 6)
+    .map(([albaranNum]) => albaranNum);
+
+  return {
+    shouldSend: lowConfidence || severeAlbaranes.length > 0,
+    confidence,
+    lowConfidence,
+    severeAlbaranes,
+    issuesByAlbaran
+  };
+}
+
 function extractExtractionWarningsFromAnalysis(analysisText) {
   if (!analysisText) return [];
   const marker = '=== EXTRACTION WARNINGS (JSON) ===';
@@ -854,6 +925,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                 const confidenceLines = buildModelConfidenceEmailLines(analysisText);
                 const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisText);
                 const recipientEmail = await getCurrentSessionEmail();
+                const criticalAlert = buildCriticalAlertContext(compareResult, analysisText);
 
                 if (compareResult && !compareResult.ok) {
                   try {
@@ -911,6 +983,40 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       `
                     });
                     showStatus(`Email de incongruencias enviado para ${item.fileName}`, 'success');
+
+                    if (criticalAlert.shouldSend) {
+                      const failedAlbaranes = (Array.isArray(compareResult?.incongruentAlbaranes)
+                        ? compareResult.incongruentAlbaranes
+                        : [])
+                        .map(num => String(num || '').trim())
+                        .filter(Boolean);
+                      const confidenceValue = criticalAlert.confidence;
+                      const confidenceLabel = confidenceValue === null
+                        ? 'No disponible'
+                        : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
+                      const severeAlbaranesLabel = criticalAlert.severeAlbaranes.length
+                        ? criticalAlert.severeAlbaranes.join(', ')
+                        : 'Ninguno';
+
+                      await ipcRenderer.invoke('send-email', {
+                        to: recipientEmail,
+                        subject: `ERROR IMPORTANTE (${item.fileName || 'archivo'})`,
+                        text: [
+                          'Se han encontrado incongruencias críticas en este archivo y necesita revisión humana.',
+                          '',
+                          `Nombre archivo: ${item.fileName || 'N/A'}`,
+                          `Número de factura: ${facturaRef}`,
+                          `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
+                          `Confianza IA: ${confidenceLabel}`,
+                          `Albaranes con más de 6 incongruencias: ${severeAlbaranesLabel}`,
+                          `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
+                          'Links de albaranes fallados:',
+                          ...incongruentAlbaranLinks,
+                          '',
+                          'Acción requerida: revisión humana.'
+                        ].join('\n')
+                      });
+                    }
                   } catch (emailError) {
                     console.error('Error enviando email de incongruencias:', emailError);
                     showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
@@ -951,6 +1057,29 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       `
                     });
                     showStatus(`Email de validación enviado para ${item.fileName}`, 'success');
+
+                    if (criticalAlert.lowConfidence) {
+                      const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
+                      const confidenceValue = criticalAlert.confidence;
+                      const confidenceLabel = confidenceValue === null
+                        ? 'No disponible'
+                        : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
+                      await ipcRenderer.invoke('send-email', {
+                        to: recipientEmail,
+                        subject: `ERROR IMPORTANTE (${item.fileName || 'archivo'})`,
+                        text: [
+                          'Se ha detectado una confianza baja de IA y se requiere revisión humana.',
+                          '',
+                          `Nombre archivo: ${item.fileName || 'N/A'}`,
+                          `Número de factura: ${facturaRef}`,
+                          'Albaranes fallados: N/A',
+                          `Confianza IA: ${confidenceLabel}`,
+                          `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
+                          '',
+                          'Acción requerida: revisión humana.'
+                        ].join('\n')
+                      });
+                    }
                   } catch (emailOkError) {
                     console.error('Error enviando email de validación:', emailOkError);
                     showStatus(`No se pudo enviar email de validación: ${emailOkError.message || emailOkError}`, 'error');
