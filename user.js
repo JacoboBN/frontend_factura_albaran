@@ -31,9 +31,9 @@ const uploadDropZone = document.getElementById('upload-drop-zone');
 const uploadDropClose = document.getElementById('upload-drop-close');
 const uploadDropTitle = document.getElementById('upload-drop-title');
 
-const DEFAULT_QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
-const STARTUP_QUEUE_STEPS = ['OCR', 'IA', 'Enviando', 'Enviado'];
-const FACTURA_QUEUE_STEPS = ['Subiendo', 'IA', 'Comparando', 'comparado', 'email'];
+const DEFAULT_QUEUE_STEPS = ['Subiendo', 'IA', 'Moviendo', 'Movido'];
+const STARTUP_QUEUE_STEPS = ['OCR', 'IA', 'Moviendo', 'Movido'];
+const FACTURA_QUEUE_STEPS = ['Subiendo', 'IA', 'Comparando', 'Comparado', 'Email'];
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
 
