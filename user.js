@@ -31,9 +31,9 @@ const uploadDropZone = document.getElementById('upload-drop-zone');
 const uploadDropClose = document.getElementById('upload-drop-close');
 const uploadDropTitle = document.getElementById('upload-drop-title');
 
-const DEFAULT_QUEUE_STEPS = ['Subiendo', 'IA', 'Moviendo', 'Movido'];
-const STARTUP_QUEUE_STEPS = ['OCR', 'IA', 'Moviendo', 'Movido'];
-const FACTURA_QUEUE_STEPS = ['Subiendo', 'IA', 'Comparando', 'Comparado', 'Email'];
+const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
+const STARTUP_QUEUE_STEPS = ['Esperando', 'OCR', 'IA', 'Moviendo', 'Movido'];
+const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Comparando', 'Comparado', 'Email'];
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
 
@@ -447,8 +447,9 @@ function buildIncongruentAlbaranesLinks(compareResult = {}) {
   if (docs.length) {
     return docs.map((doc) => {
       const num = doc?.albaranNum || 'N/A';
+      const fileName = doc?.fileName || 'Nombre no disponible';
       const url = doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible';
-      return `- Albarán ${num}: ${url}`;
+      return `- Albarán ${num} (${fileName}): ${url}`;
     });
   }
 
@@ -459,7 +460,16 @@ function buildIncongruentAlbaranesLinks(compareResult = {}) {
     return ['- No disponible'];
   }
 
-  return nums.map((num) => `- Albarán ${num}: link no disponible`);
+  return nums.map((num) => `- Albarán ${num} (nombre no disponible): link no disponible`);
+}
+
+function escapeHtml(value = '') {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function buildCongruentAlbaranesSummary(compareResult = {}) {
@@ -696,9 +706,16 @@ async function checkSession({ forceBillingSetup = false } = {}) {
 async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
   uiLog('log', 'uploadFilesToFolder:start', { parentFolderName });
   try {
-    const filePaths = (Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0)
+    const preQueuedItems = (Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0
+      && selectedFilePaths.every(item => item && typeof item === 'object' && item.filePath))
       ? selectedFilePaths
-      : await ipcRenderer.invoke('select-file');
+      : null;
+
+    const filePaths = preQueuedItems
+      ? preQueuedItems.map(item => item.filePath)
+      : ((Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0)
+        ? selectedFilePaths
+        : await ipcRenderer.invoke('select-file'));
     uiLog('log', 'uploadFilesToFolder:selected-files', { count: filePaths?.length || 0 });
 
     if (filePaths && filePaths.length > 0) {
@@ -735,10 +752,14 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
       const preparedItems = [];
 
-      for (const p of filePaths) {
+      for (let fileIndex = 0; fileIndex < filePaths.length; fileIndex += 1) {
+        const p = filePaths[fileIndex];
         const fileName = pathBasename(p);
-        const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        initQueueItem(queueId, fileName, { docType });
+        const queueId = preQueuedItems?.[fileIndex]?.queueId || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+        if (!preQueuedItems?.[fileIndex]) {
+          initQueueItem(queueId, fileName, { docType });
+        }
 
         try {
           updateQueueStep(queueId, 'Subiendo');
@@ -839,11 +860,23 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                     const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
                     const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
                     const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
+                    const compareIssues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+                    const htmlIncongruentLinks = incongruentAlbaranLinks
+                      .map(line => `<li>${escapeHtml(String(line || '').replace(/^\-\s*/, ''))}</li>`)
+                      .join('');
+                    const htmlCongruentSummary = congruentAlbaranSummary
+                      .map(line => `<li>${escapeHtml(String(line || '').replace(/^\-\s*/, ''))}</li>`)
+                      .join('');
+                    const htmlIssues = compareIssues.length
+                      ? compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')
+                      : '<li>Sin detalle adicional</li>';
+
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
-                      subject: `Incongruencias en factura ${facturaRef}`,
+                      subject: `${item.fileName || 'Factura'} Incongruencias encontradas en factura ${facturaRef}`,
                       text: [
                         `Factura comparada: ${facturaRef}`,
+                        `Nombre archivo factura: ${item.fileName || 'N/A'}`,
                         `Albaranes comparados: ${albaranesLabel}`,
                         ...confidenceLines,
                         ...extractionWarningsLines,
@@ -856,8 +889,26 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         compareResult.message || 'Se encontraron incongruencias.',
                         '',
                         'Detalles:',
-                        ...(compareResult.issues || []).map(issue => `- ${issue}`)
-                      ].join('\n')
+                        ...compareIssues.map(issue => `- ${issue}`)
+                      ].join('\n'),
+                      html: `
+                        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.45;">
+                          <h2 style="margin-bottom: 10px;">⚠️ <strong>Incongruencias encontradas</strong></h2>
+                          <p><strong>Factura comparada:</strong> <em>${escapeHtml(facturaRef)}</em></p>
+                          <p><strong>Nombre archivo factura:</strong> <em>${escapeHtml(item.fileName || 'N/A')}</em></p>
+                          <p><strong>Albaranes comparados:</strong> ${escapeHtml(albaranesLabel)}</p>
+                          <p><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
+                          <p><strong>Warnings de extracción:</strong><br>${escapeHtml(extractionWarningsLines.join(' | '))}</p>
+                          <p><strong>Factura original:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
+                          <p><strong>Albaranes con incongruencias</strong></p>
+                          <ul>${htmlIncongruentLinks || '<li>No disponible</li>'}</ul>
+                          <p><strong>Albaranes correctos</strong> <em>(número y nombre guardado)</em></p>
+                          <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
+                          <p><strong>Resumen:</strong> ${escapeHtml(compareResult.message || 'Se encontraron incongruencias.')}</p>
+                          <p><strong>Detalles</strong></p>
+                          <ul>${htmlIssues}</ul>
+                        </div>
+                      `
                     });
                     showStatus(`Email de incongruencias enviado para ${item.fileName}`, 'success');
                   } catch (emailError) {
@@ -867,16 +918,37 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                   }
                 } else if (compareResult?.ok) {
                   try {
+                    const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
+                    const htmlCongruentSummary = congruentAlbaranSummary
+                      .map(line => `<li>${escapeHtml(String(line || '').replace(/^\-\s*/, ''))}</li>`)
+                      .join('');
+                    const subjectOk = `${item.fileName || 'Factura'} Sin incongruencias en factura ${facturaRef}`;
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
-                      subject: `Factura ${facturaRef} bien`,
+                      subject: subjectOk,
                       text: [
                         `Factura comparada: ${facturaRef}`,
+                        `Nombre archivo factura: ${item.fileName || 'N/A'}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        'Albaranes correctos (número y nombre guardado):',
+                        ...congruentAlbaranSummary,
                         ...confidenceLines,
                         ...extractionWarningsLines,
                         'Se han comparado correctamente y todo bien.'
-                      ].join('\n')
+                      ].join('\n'),
+                      html: `
+                        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.45;">
+                          <h2 style="margin-bottom: 10px;">✅ <strong>Factura validada correctamente</strong></h2>
+                          <p><strong>Factura comparada:</strong> <em>${escapeHtml(facturaRef)}</em></p>
+                          <p><strong>Nombre archivo factura:</strong> <em>${escapeHtml(item.fileName || 'N/A')}</em></p>
+                          <p><strong>Albaranes comparados:</strong> ${escapeHtml(albaranesLabel)}</p>
+                          <p><strong>Albaranes correctos</strong> <em>(número y nombre guardado)</em></p>
+                          <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
+                          <p><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
+                          <p><strong>Warnings de extracción:</strong><br>${escapeHtml(extractionWarningsLines.join(' | '))}</p>
+                          <p><em>Se han comparado correctamente y todo bien.</em></p>
+                        </div>
+                      `
                     });
                     showStatus(`Email de validación enviado para ${item.fileName}`, 'success');
                   } catch (emailOkError) {
@@ -945,12 +1017,35 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
   }
 }
 
+function queueUploadsAsWaiting(parentFolderName, filePaths = []) {
+  const docType = (parentFolderName || '').toLowerCase().includes('factura') ? 'factura' : 'albaran';
+  return filePaths.map((filePath) => {
+    const fileName = pathBasename(filePath);
+    const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    initQueueItem(queueId, fileName, { docType });
+    return { filePath, fileName, queueId };
+  });
+}
+
+async function scheduleUploadFlow(parentFolderName, selectedFilePaths = null) {
+  const filePaths = (Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0)
+    ? selectedFilePaths
+    : await ipcRenderer.invoke('select-file');
+
+  if (!filePaths || !filePaths.length) {
+    return;
+  }
+
+  const queuedItems = queueUploadsAsWaiting(parentFolderName, filePaths);
+  await enqueueUploadFlow(
+    () => uploadFilesToFolder(parentFolderName, queuedItems),
+    { label: parentFolderName }
+  );
+}
+
 if (fileUpload) {
   fileUpload.addEventListener('click', async () => {
-    await enqueueUploadFlow(
-      () => uploadFilesToFolder('Albaranes'),
-      { label: 'Albaranes' }
-    );
+    await scheduleUploadFlow('Albaranes');
   });
 }
 
@@ -1670,10 +1765,7 @@ function bindDropHandlers(element, onDrop) {
 
 function openUploadDropModal(parentFolderName) {
   if (!uploadDropModal || !uploadDropZone) {
-    enqueueUploadFlow(
-      () => uploadFilesToFolder(parentFolderName),
-      { label: parentFolderName }
-    );
+    scheduleUploadFlow(parentFolderName);
     return;
   }
 
@@ -1714,20 +1806,14 @@ if (uploadDropZone) {
     const target = currentUploadTargetFolder;
     if (!target) return;
     closeUploadDropModal();
-    await enqueueUploadFlow(
-      () => uploadFilesToFolder(target),
-      { label: target }
-    );
+    await scheduleUploadFlow(target);
   });
 
   bindDropHandlers(uploadDropZone, async (droppedFilePaths) => {
     const target = currentUploadTargetFolder;
     if (!target) return;
     closeUploadDropModal();
-    await enqueueUploadFlow(
-      () => uploadFilesToFolder(target, droppedFilePaths),
-      { label: target }
-    );
+    await scheduleUploadFlow(target, droppedFilePaths);
   });
 }
 
@@ -1828,14 +1914,25 @@ ipcRenderer.on('queue-event', (event, payload) => {
 
 function initQueueItem(id, fileName, options = {}) {
   const steps = resolveQueueSteps(options);
-  uploadQueue.set(id, { fileName, status: 'Pendiente', error: null, steps });
+  uploadQueue.set(id, { fileName, status: 'Esperando', error: null, steps });
   renderQueue();
 }
 
 function updateQueueStep(id, step) {
   const item = uploadQueue.get(id);
   if (!item) return;
-  item.status = step;
+  const rawStep = String(step || '').trim().toLowerCase();
+  let normalizedStep = step;
+
+  if (['pendiente', 'esperando', 'en cola', 'cola', 'queued', 'queue'].includes(rawStep)) {
+    normalizedStep = 'Esperando';
+  } else if (rawStep === 'comparado') {
+    normalizedStep = 'Comparado';
+  } else if (rawStep === 'email') {
+    normalizedStep = 'Email';
+  }
+
+  item.status = normalizedStep;
   item.error = null;
   uploadQueue.set(id, item);
   renderQueue();
