@@ -35,6 +35,22 @@ const DEFAULT_QUEUE_STEPS = ['Subiendo', 'IA', 'Enviando', 'Enviado'];
 const STARTUP_QUEUE_STEPS = ['OCR', 'IA', 'Enviando', 'Enviado'];
 const FACTURA_QUEUE_STEPS = ['Subiendo', 'IA', 'Comparando', 'comparado', 'email'];
 let currentUploadTargetFolder = null;
+let uploadFlowTail = Promise.resolve();
+
+function enqueueUploadFlow(task, meta = {}) {
+  const runTask = async () => {
+    const label = meta?.label || 'documentos';
+    try {
+      return await task();
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const next = uploadFlowTail.then(runTask, runTask);
+  uploadFlowTail = next.catch(() => {});
+  return next;
+}
 
 function resolveQueueSteps({ source = '', docType = '', steps = null } = {}) {
   if (Array.isArray(steps) && steps.length > 0) {
@@ -931,7 +947,10 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
 if (fileUpload) {
   fileUpload.addEventListener('click', async () => {
-    await uploadFilesToFolder('Albaranes');
+    await enqueueUploadFlow(
+      () => uploadFilesToFolder('Albaranes'),
+      { label: 'Albaranes' }
+    );
   });
 }
 
@@ -1651,7 +1670,10 @@ function bindDropHandlers(element, onDrop) {
 
 function openUploadDropModal(parentFolderName) {
   if (!uploadDropModal || !uploadDropZone) {
-    uploadFilesToFolder(parentFolderName);
+    enqueueUploadFlow(
+      () => uploadFilesToFolder(parentFolderName),
+      { label: parentFolderName }
+    );
     return;
   }
 
@@ -1692,14 +1714,20 @@ if (uploadDropZone) {
     const target = currentUploadTargetFolder;
     if (!target) return;
     closeUploadDropModal();
-    await uploadFilesToFolder(target);
+    await enqueueUploadFlow(
+      () => uploadFilesToFolder(target),
+      { label: target }
+    );
   });
 
   bindDropHandlers(uploadDropZone, async (droppedFilePaths) => {
     const target = currentUploadTargetFolder;
     if (!target) return;
     closeUploadDropModal();
-    await uploadFilesToFolder(target, droppedFilePaths);
+    await enqueueUploadFlow(
+      () => uploadFilesToFolder(target, droppedFilePaths),
+      { label: target }
+    );
   });
 }
 
