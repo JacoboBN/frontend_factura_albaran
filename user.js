@@ -543,6 +543,40 @@ function escapeHtml(value = '') {
     .replace(/'/g, '&#39;');
 }
 
+function formatIncongruentAlbaranLineHtml(line = '') {
+  const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?)\s+\((.+?)\):\s*(.+)$/i);
+  if (!match) return escapeHtml(cleaned);
+
+  const [, num, fileName, urlRaw] = match;
+  const safeNum = escapeHtml(num);
+  const safeName = escapeHtml(fileName);
+  const safeUrl = escapeHtml(urlRaw);
+  const hasLink = /^https?:\/\//i.test(String(urlRaw || '').trim());
+  const urlHtml = hasLink ? `<a href="${safeUrl}">Abrir en Drive</a>` : safeUrl;
+
+  return `Albarán <strong>${safeNum}</strong> (<strong>${safeName}</strong>): ${urlHtml}`;
+}
+
+function formatCongruentAlbaranLineHtml(line = '') {
+  const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*(.+)$/i);
+  if (!match) return escapeHtml(cleaned);
+
+  const [, num, fileName] = match;
+  return `Albarán <strong>${escapeHtml(num)}</strong>: <strong>${escapeHtml(fileName)}</strong>`;
+}
+
+function toHtmlList(lines = [], formatter = (line) => escapeHtml(line), emptyText = 'No disponible') {
+  if (!Array.isArray(lines) || !lines.length) {
+    return `<li>${escapeHtml(emptyText)}</li>`;
+  }
+
+  return lines
+    .map((line) => `<li>${formatter(line)}</li>`)
+    .join('');
+}
+
 function buildCongruentAlbaranesSummary(compareResult = {}) {
   const docs = Array.isArray(compareResult?.congruentAlbaranDocs)
     ? compareResult.congruentAlbaranDocs
@@ -933,12 +967,16 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                     const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
                     const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
                     const compareIssues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
-                    const htmlIncongruentLinks = incongruentAlbaranLinks
-                      .map(line => `<li>${escapeHtml(String(line || '').replace(/^\-\s*/, ''))}</li>`)
-                      .join('');
-                    const htmlCongruentSummary = congruentAlbaranSummary
-                      .map(line => `<li>${escapeHtml(String(line || '').replace(/^\-\s*/, ''))}</li>`)
-                      .join('');
+                    const htmlIncongruentLinks = toHtmlList(
+                      incongruentAlbaranLinks,
+                      formatIncongruentAlbaranLineHtml,
+                      'No disponible'
+                    );
+                    const htmlCongruentSummary = toHtmlList(
+                      congruentAlbaranSummary,
+                      formatCongruentAlbaranLineHtml,
+                      'No disponible'
+                    );
                     const htmlIssues = compareIssues.length
                       ? compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')
                       : '<li>Sin detalle adicional</li>';
@@ -947,38 +985,77 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       to: recipientEmail,
                       subject: `${item.fileName || 'Factura'} Incongruencias encontradas en factura ${facturaRef}`,
                       text: [
+                        'ALERTA DE COMPARACIÓN: FACTURA CON INCONGRUENCIAS',
+                        '',
                         `Factura comparada: ${facturaRef}`,
                         `Nombre archivo factura: ${item.fileName || 'N/A'}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        '',
+                        '=== RESUMEN DEL MODELO ===',
                         ...confidenceLines,
+                        '',
+                        '=== WARNINGS DE EXTRACCIÓN ===',
                         ...extractionWarningsLines,
+                        '',
+                        '=== FACTURA ORIGINAL ===',
                         `Link factura original: ${facturaDriveLink || 'No disponible'}`,
+                        '',
+                        '=== ALBARANES CON INCONGRUENCIAS (número y nombre) ===',
                         'Links albaranes con incongruencias:',
                         ...incongruentAlbaranLinks,
                         '',
+                        '=== ALBARANES CORRECTOS (número y nombre) ===',
                         'Albaranes correctos (número y nombre guardado):',
                         ...congruentAlbaranSummary,
+                        '',
+                        '=== RESUMEN DE COMPARACIÓN ===',
                         compareResult.message || 'Se encontraron incongruencias.',
                         '',
-                        'Detalles:',
+                        '=== DETALLES ===',
                         ...compareIssues.map(issue => `- ${issue}`)
                       ].join('\n'),
                       html: `
-                        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.45;">
-                          <h2 style="margin-bottom: 10px;">⚠️ <strong>Incongruencias encontradas</strong></h2>
-                          <p><strong>Factura comparada:</strong> <em>${escapeHtml(facturaRef)}</em></p>
-                          <p><strong>Nombre archivo factura:</strong> <em>${escapeHtml(item.fileName || 'N/A')}</em></p>
-                          <p><strong>Albaranes comparados:</strong> ${escapeHtml(albaranesLabel)}</p>
-                          <p><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
-                          <p><strong>Warnings de extracción:</strong><br>${escapeHtml(extractionWarningsLines.join(' | '))}</p>
-                          <p><strong>Factura original:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
-                          <p><strong>Albaranes con incongruencias</strong></p>
-                          <ul>${htmlIncongruentLinks || '<li>No disponible</li>'}</ul>
-                          <p><strong>Albaranes correctos</strong> <em>(número y nombre guardado)</em></p>
-                          <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
-                          <p><strong>Resumen:</strong> ${escapeHtml(compareResult.message || 'Se encontraron incongruencias.')}</p>
-                          <p><strong>Detalles</strong></p>
-                          <ul>${htmlIssues}</ul>
+                        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+                          <h2 style="margin: 0 0 12px; color: #8a1c1c;">⚠️ <strong>Incongruencias encontradas</strong></h2>
+
+                          <div style="background:#f8f9fb; border:1px solid #e6e9ef; border-radius:8px; padding:12px; margin-bottom:12px;">
+                            <p style="margin:0 0 6px;"><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+                            <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
+                            <p style="margin:0;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+                          </div>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">🔎 Resumen del modelo</h3>
+                            <p style="margin:0;"><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
+                          </div>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">🧾 Warnings de extracción</h3>
+                            <p style="margin:0;">${escapeHtml(extractionWarningsLines.join(' | '))}</p>
+                          </div>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">📄 Factura original</h3>
+                            <p style="margin:0;">${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir factura en Drive</a>` : 'No disponible'}</p>
+                          </div>
+
+                          <hr style="border:none; border-top:1px solid #eceff3; margin:16px 0;" />
+
+                          <h3 style="margin:0 0 8px; font-size:15px;">❌ Albaranes con incongruencias</h3>
+                          <ul style="margin-top:0;">${htmlIncongruentLinks}</ul>
+
+                          <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
+                          <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">📌 Resumen</h3>
+                            <p style="margin:0;">${escapeHtml(compareResult.message || 'Se encontraron incongruencias.')}</p>
+                          </div>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">🧩 Detalles</h3>
+                            <ul style="margin-top:0;">${htmlIssues}</ul>
+                          </div>
                         </div>
                       `
                     });
@@ -1004,11 +1081,16 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         text: [
                           'Se han encontrado incongruencias críticas en este archivo y necesita revisión humana.',
                           '',
+                          '=== DATOS PRINCIPALES ===',
                           `Nombre archivo: ${item.fileName || 'N/A'}`,
                           `Número de factura: ${facturaRef}`,
                           `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
+                          '',
+                          '=== ALERTAS ===',
                           `Confianza IA: ${confidenceLabel}`,
                           `Albaranes con más de 6 incongruencias: ${severeAlbaranesLabel}`,
+                          '',
+                          '=== ENLACES ===',
                           `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
                           'Links de albaranes fallados:',
                           ...incongruentAlbaranLinks,
@@ -1025,34 +1107,57 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                 } else if (compareResult?.ok) {
                   try {
                     const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-                    const htmlCongruentSummary = congruentAlbaranSummary
-                      .map(line => `<li>${escapeHtml(String(line || '').replace(/^\-\s*/, ''))}</li>`)
-                      .join('');
+                    const htmlCongruentSummary = toHtmlList(
+                      congruentAlbaranSummary,
+                      formatCongruentAlbaranLineHtml,
+                      'No disponible'
+                    );
                     const subjectOk = `${item.fileName || 'Factura'} Sin incongruencias en factura ${facturaRef}`;
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
                       subject: subjectOk,
                       text: [
+                        'VALIDACIÓN COMPLETADA: FACTURA CORRECTA',
+                        '',
                         `Factura comparada: ${facturaRef}`,
                         `Nombre archivo factura: ${item.fileName || 'N/A'}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        '',
+                        '=== ALBARANES CORRECTOS (número y nombre) ===',
                         'Albaranes correctos (número y nombre guardado):',
                         ...congruentAlbaranSummary,
+                        '',
+                        '=== RESUMEN DEL MODELO ===',
                         ...confidenceLines,
+                        '',
+                        '=== WARNINGS DE EXTRACCIÓN ===',
                         ...extractionWarningsLines,
                         'Se han comparado correctamente y todo bien.'
                       ].join('\n'),
                       html: `
-                        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.45;">
-                          <h2 style="margin-bottom: 10px;">✅ <strong>Factura validada correctamente</strong></h2>
-                          <p><strong>Factura comparada:</strong> <em>${escapeHtml(facturaRef)}</em></p>
-                          <p><strong>Nombre archivo factura:</strong> <em>${escapeHtml(item.fileName || 'N/A')}</em></p>
-                          <p><strong>Albaranes comparados:</strong> ${escapeHtml(albaranesLabel)}</p>
-                          <p><strong>Albaranes correctos</strong> <em>(número y nombre guardado)</em></p>
-                          <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
-                          <p><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
-                          <p><strong>Warnings de extracción:</strong><br>${escapeHtml(extractionWarningsLines.join(' | '))}</p>
-                          <p><em>Se han comparado correctamente y todo bien.</em></p>
+                        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+                          <h2 style="margin: 0 0 12px; color: #17693a;">✅ <strong>Factura validada correctamente</strong></h2>
+
+                          <div style="background:#f6fbf8; border:1px solid #dcefe3; border-radius:8px; padding:12px; margin-bottom:12px;">
+                            <p style="margin:0 0 6px;"><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+                            <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
+                            <p style="margin:0;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+                          </div>
+
+                          <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
+                          <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">🔎 Resumen del modelo</h3>
+                            <p style="margin:0;"><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
+                          </div>
+
+                          <div style="margin: 14px 0;">
+                            <h3 style="margin:0 0 8px; font-size:15px;">🧾 Warnings de extracción</h3>
+                            <p style="margin:0;">${escapeHtml(extractionWarningsLines.join(' | '))}</p>
+                          </div>
+
+                          <p style="margin-top:12px;"><em>Se han comparado correctamente y todo bien.</em></p>
                         </div>
                       `
                     });
@@ -1070,10 +1175,15 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         text: [
                           'Se ha detectado una confianza baja de IA y se requiere revisión humana.',
                           '',
+                          '=== DATOS PRINCIPALES ===',
                           `Nombre archivo: ${item.fileName || 'N/A'}`,
                           `Número de factura: ${facturaRef}`,
                           'Albaranes fallados: N/A',
+                          '',
+                          '=== ALERTAS ===',
                           `Confianza IA: ${confidenceLabel}`,
+                          '',
+                          '=== ENLACES ===',
                           `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
                           '',
                           'Acción requerida: revisión humana.'
