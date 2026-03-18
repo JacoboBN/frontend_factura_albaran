@@ -16,6 +16,7 @@ const searchResults = document.getElementById('search-results');
 
 const queueList = document.getElementById('upload-queue-list');
 const uploadQueue = new Map();
+const canceledQueueIds = new Set();
 const startupStatusEl = document.getElementById('startup-status');
 const startupOverlay = document.getElementById('startup-overlay');
 const startupOverlayMessage = document.getElementById('startup-overlay-message');
@@ -866,6 +867,12 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
           initQueueItem(queueId, fileName, { docType });
         }
 
+        if (canceledQueueIds.has(queueId)) {
+          markQueueCancelled(queueId);
+          showStatus(`${fileName} cancelado antes de subir.`, 'success');
+          continue;
+        }
+
         try {
           updateQueueStep(queueId, 'Subiendo');
           showStatus(`Subiendo ${fileName}...`, 'loading');
@@ -917,6 +924,12 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
           const analysisResult = batchResults[idx] || null;
 
           try {
+            if (canceledQueueIds.has(item.queueId)) {
+              markQueueCancelled(item.queueId);
+              showStatus(`${item.fileName} cancelado.`, 'success');
+              continue;
+            }
+
             const analysisSuccess = Boolean(
               analysisResult
               && analysisResult.success !== false
@@ -934,6 +947,12 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
             const analysisText = analysisResult.analysis || analysisResult?.raw?.analysis || '';
             if (docType !== 'factura') {
               updateQueueStep(item.queueId, 'Enviando');
+            }
+
+            if (canceledQueueIds.has(item.queueId)) {
+              markQueueCancelled(item.queueId);
+              showStatus(`${item.fileName} cancelado.`, 'success');
+              continue;
             }
 
             if (docType === 'factura') {
@@ -2160,6 +2179,7 @@ function initQueueItem(id, fileName, options = {}) {
 function updateQueueStep(id, step) {
   const item = uploadQueue.get(id);
   if (!item) return;
+  if (item.status === 'Cancelado') return;
   const rawStep = String(step || '').trim().toLowerCase();
   let normalizedStep = step;
 
@@ -2175,6 +2195,30 @@ function updateQueueStep(id, step) {
   item.error = null;
   uploadQueue.set(id, item);
   renderQueue();
+}
+
+function markQueueCancelled(id, message = 'Cancelado por el usuario') {
+  const item = uploadQueue.get(id);
+  if (!item) return;
+  item.status = 'Cancelado';
+  item.error = message;
+  uploadQueue.set(id, item);
+  canceledQueueIds.add(id);
+  renderQueue();
+}
+
+function requestCancelQueueItem(id) {
+  const item = uploadQueue.get(id);
+  if (!item) return;
+
+  if (item.status === 'Error' || item.status === 'Cancelado' || item.status === 'Enviado' || item.status === 'Movido' || item.status === 'Email') {
+    return;
+  }
+
+  const confirmed = confirm(`¿Seguro que quieres cancelar ${item.fileName}?`);
+  if (!confirmed) return;
+
+  markQueueCancelled(id);
 }
 
 function markQueueError(id, message) {
@@ -2218,6 +2262,8 @@ function renderQueue() {
 
       if (item.status === 'Error') {
         stepEl.classList.add('error');
+      } else if (item.status === 'Cancelado') {
+        stepEl.classList.add('error');
       } else if (item.status === step) {
         stepEl.classList.add('active');
       } else if (currentIndex >= 0 && steps.indexOf(step) < currentIndex) {
@@ -2229,10 +2275,50 @@ function renderQueue() {
 
     if (item.error) {
       const errorText = document.createElement('div');
-      errorText.style.color = '#721c24';
+      errorText.style.color = item.status === 'Cancelado' ? '#856404' : '#721c24';
       errorText.style.fontSize = '12px';
       errorText.textContent = `Error: ${item.error}`;
       wrapper.appendChild(errorText);
+    }
+
+    const canCancel = !['Error', 'Cancelado', 'Enviado', 'Movido', 'Email'].includes(item.status);
+    if (canCancel) {
+      const controls = document.createElement('div');
+      controls.style.display = 'flex';
+      controls.style.justifyContent = 'flex-end';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.title = `Cancelar ${item.fileName}`;
+      cancelBtn.setAttribute('aria-label', `Cancelar ${item.fileName}`);
+      cancelBtn.textContent = '✕';
+      cancelBtn.style.width = '28px';
+      cancelBtn.style.height = '28px';
+      cancelBtn.style.minWidth = '28px';
+      cancelBtn.style.borderRadius = '50%';
+      cancelBtn.style.border = '2px solid #dc3545';
+      cancelBtn.style.background = '#dc3545';
+      cancelBtn.style.color = '#fff';
+      cancelBtn.style.cursor = 'pointer';
+      cancelBtn.style.fontSize = '15px';
+      cancelBtn.style.fontWeight = '700';
+      cancelBtn.style.lineHeight = '1';
+      cancelBtn.style.display = 'inline-flex';
+      cancelBtn.style.alignItems = 'center';
+      cancelBtn.style.justifyContent = 'center';
+      cancelBtn.style.padding = '0';
+      cancelBtn.addEventListener('click', () => requestCancelQueueItem(id));
+      cancelBtn.addEventListener('mouseenter', () => {
+        cancelBtn.style.background = '#bb2d3b';
+        cancelBtn.style.borderColor = '#bb2d3b';
+      });
+      cancelBtn.addEventListener('mouseleave', () => {
+        cancelBtn.style.background = '#dc3545';
+        cancelBtn.style.borderColor = '#dc3545';
+      });
+
+      controls.appendChild(cancelBtn);
+      wrapper.appendChild(controls);
     }
 
     wrapper.appendChild(name);
