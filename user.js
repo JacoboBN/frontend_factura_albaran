@@ -438,6 +438,91 @@ function getIssueCountByAlbaran(compareResult = {}) {
   return counts;
 }
 
+function normalizeIssueDetail(rawLine = '') {
+  return String(rawLine || '').replace(/^\-\s*/, '').trim();
+}
+
+function isArticleNotFoundIssue(issueDetail = '') {
+  const detail = String(issueDetail || '');
+  return /art[ií]culo/i.test(detail) && /no encontrado/i.test(detail);
+}
+
+function isZeroComparisonIssue(issueDetail = '') {
+  const detail = String(issueDetail || '');
+  if (!/^Cantidad distinta para|^Importe distinto para/i.test(detail)) {
+    return false;
+  }
+
+  const match = detail.match(/factura=([-+]?\d*\.?\d+),\s*albar[aá]n=([-+]?\d*\.?\d+)/i);
+  if (!match) return false;
+
+  const facturaValue = Number(match[1]);
+  const albaranValue = Number(match[2]);
+  if (!Number.isFinite(facturaValue) || !Number.isFinite(albaranValue)) {
+    return false;
+  }
+
+  return Math.abs(facturaValue) < 1e-9 || Math.abs(albaranValue) < 1e-9;
+}
+
+function evaluateEmptyUploadPattern(compareResult = {}) {
+  const issues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+  const detailedIssues = issues
+    .map(line => String(line || '').trim())
+    .filter(line => line.startsWith('-'))
+    .map(normalizeIssueDetail)
+    .filter(Boolean);
+
+  if (!detailedIssues.length) {
+    return {
+      shouldWarnEmptyUpload: false,
+      detailedIssueCount: 0,
+      suspiciousIssueCount: 0
+    };
+  }
+
+  const suspiciousIssueCount = detailedIssues.filter((issue) => (
+    isArticleNotFoundIssue(issue) || isZeroComparisonIssue(issue)
+  )).length;
+
+  return {
+    shouldWarnEmptyUpload: detailedIssues.length > 8 && suspiciousIssueCount === detailedIssues.length,
+    detailedIssueCount: detailedIssues.length,
+    suspiciousIssueCount
+  };
+}
+
+function buildPrimaryEmailIssueLines(compareResult = {}, severeAlbaranes = []) {
+  const severeSet = new Set((Array.isArray(severeAlbaranes) ? severeAlbaranes : []).map(num => String(num || '').trim()));
+  const sourceIssues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+  const normalizedIssues = [];
+  let currentAlbaran = null;
+  let currentIsSevere = false;
+
+  for (const rawLine of sourceIssues) {
+    const line = String(rawLine || '').trim();
+    const headerMatch = line.match(/^Albar[aá]n\s+(.+?):$/i);
+
+    if (headerMatch) {
+      currentAlbaran = String(headerMatch[1] || '').trim();
+      currentIsSevere = severeSet.has(currentAlbaran);
+      normalizedIssues.push(line);
+      if (currentIsSevere) {
+        normalizedIssues.push('- REVISAR EL EMAIL IMPORTANTE');
+      }
+      continue;
+    }
+
+    if (currentIsSevere && line.startsWith('-')) {
+      continue;
+    }
+
+    normalizedIssues.push(line);
+  }
+
+  return normalizedIssues;
+}
+
 function buildCriticalAlertContext(compareResult = {}, analysisText = '') {
   const confidence = extractModelConfidenceValue(analysisText);
   const lowConfidence = confidence !== null && confidence < 0.75;
@@ -445,13 +530,15 @@ function buildCriticalAlertContext(compareResult = {}, analysisText = '') {
   const severeAlbaranes = Array.from(issuesByAlbaran.entries())
     .filter(([, issueCount]) => issueCount > 6)
     .map(([albaranNum]) => albaranNum);
+  const emptyUploadPattern = evaluateEmptyUploadPattern(compareResult);
 
   return {
     shouldSend: lowConfidence || severeAlbaranes.length > 0,
     confidence,
     lowConfidence,
     severeAlbaranes,
-    issuesByAlbaran
+    issuesByAlbaran,
+    emptyUploadPattern
   };
 }
 
@@ -985,7 +1072,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                     const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
                     const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
                     const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-                    const compareIssues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+                    const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes);
                     const htmlIncongruentLinks = toHtmlList(
                       incongruentAlbaranLinks,
                       formatIncongruentAlbaranLineHtml,
@@ -1093,6 +1180,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       const severeAlbaranesLabel = criticalAlert.severeAlbaranes.length
                         ? criticalAlert.severeAlbaranes.join(', ')
                         : 'Ninguno';
+                      const emergencyEmptyUploadWarning = criticalAlert.emptyUploadPattern?.shouldWarnEmptyUpload
+                        ? 'REVISAR SI SE HA SUBIDO EL ALBARÁN BIEN PORQUE SALE COMO VACÍO O CON MUCHOS ERRORES'
+                        : null;
 
                       await ipcRenderer.invoke('send-email', {
                         to: recipientEmail,
@@ -1108,6 +1198,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           '=== ALERTAS ===',
                           `Confianza IA: ${confidenceLabel}`,
                           `Albaranes con más de 6 incongruencias: ${severeAlbaranesLabel}`,
+                          ...(emergencyEmptyUploadWarning ? [emergencyEmptyUploadWarning] : []),
                           '',
                           '=== ENLACES ===',
                           `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,

@@ -375,6 +375,90 @@ function getIssueCountByAlbaran(compareResult = {}) {
   return counts;
 }
 
+function normalizeIssueDetail(rawLine = '') {
+  return String(rawLine || '').replace(/^\-\s*/, '').trim();
+}
+
+function isArticleNotFoundIssue(issueDetail = '') {
+  const detail = String(issueDetail || '');
+  return /art[ií]culo/i.test(detail) && /no encontrado/i.test(detail);
+}
+
+function isZeroComparisonIssue(issueDetail = '') {
+  const detail = String(issueDetail || '');
+  if (!/^Cantidad distinta para|^Importe distinto para/i.test(detail)) {
+    return false;
+  }
+
+  const match = detail.match(/factura=([-+]?\d*\.?\d+),\s*albar[aá]n=([-+]?\d*\.?\d+)/i);
+  if (!match) return false;
+
+  const facturaValue = Number(match[1]);
+  const albaranValue = Number(match[2]);
+  if (!Number.isFinite(facturaValue) || !Number.isFinite(albaranValue)) {
+    return false;
+  }
+
+  return Math.abs(facturaValue) < 1e-9 || Math.abs(albaranValue) < 1e-9;
+}
+
+function evaluateEmptyUploadPattern(compareResult = {}) {
+  const issues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+  const detailedIssues = issues
+    .map(line => String(line || '').trim())
+    .filter(line => line.startsWith('-'))
+    .map(normalizeIssueDetail)
+    .filter(Boolean);
+
+  if (!detailedIssues.length) {
+    return {
+      shouldWarnEmptyUpload: false,
+      detailedIssueCount: 0,
+      suspiciousIssueCount: 0
+    };
+  }
+
+  const suspiciousIssueCount = detailedIssues.filter((issue) => (
+    isArticleNotFoundIssue(issue) || isZeroComparisonIssue(issue)
+  )).length;
+
+  return {
+    shouldWarnEmptyUpload: detailedIssues.length > 8 && suspiciousIssueCount === detailedIssues.length,
+    detailedIssueCount: detailedIssues.length,
+    suspiciousIssueCount
+  };
+}
+
+function buildPrimaryEmailIssueLines(compareResult = {}, severeAlbaranes = []) {
+  const severeSet = new Set((Array.isArray(severeAlbaranes) ? severeAlbaranes : []).map(num => String(num || '').trim()));
+  const sourceIssues = Array.isArray(compareResult?.issues) ? compareResult.issues : [];
+  const normalizedIssues = [];
+  let currentIsSevere = false;
+
+  for (const rawLine of sourceIssues) {
+    const line = String(rawLine || '').trim();
+    const headerMatch = line.match(/^Albar[aá]n\s+(.+?):$/i);
+
+    if (headerMatch) {
+      const currentAlbaran = String(headerMatch[1] || '').trim();
+      currentIsSevere = severeSet.has(currentAlbaran);
+      normalizedIssues.push(line);
+      if (currentIsSevere) {
+        normalizedIssues.push('- REVISAR EL EMAIL IMPORTANTE');
+      }
+      continue;
+    }
+
+    if (currentIsSevere && line.startsWith('-')) {
+      continue;
+    }
+
+    normalizedIssues.push(line);
+  }
+
+  return normalizedIssues;
+}
+
 function buildCriticalAlertContext(compareResult = {}, analysisText = '') {
   const confidence = extractModelConfidenceValue(analysisText);
   const lowConfidence = confidence !== null && confidence < 0.75;
@@ -382,12 +466,14 @@ function buildCriticalAlertContext(compareResult = {}, analysisText = '') {
   const severeAlbaranes = Array.from(issuesByAlbaran.entries())
     .filter(([, issueCount]) => issueCount > 6)
     .map(([albaranNum]) => albaranNum);
+  const emptyUploadPattern = evaluateEmptyUploadPattern(compareResult);
 
   return {
     shouldSend: lowConfidence || severeAlbaranes.length > 0,
     lowConfidence,
     confidence,
-    severeAlbaranes
+    severeAlbaranes,
+    emptyUploadPattern
   };
 }
 
@@ -2793,7 +2879,8 @@ async function processBillingAttachmentAsFactura(attachment) {
             .join('')
         : incongruentAlbaranLinks.map(line => `<li>${escapeHtml(line)}</li>`).join('');
       const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
-      const htmlIssues = (compareResult.issues || []).map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
+      const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes);
+      const htmlIssues = compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
 
       await sendEmailNotification(
         `Incongruencias en factura ${facturaRef}`,
@@ -2811,7 +2898,7 @@ async function processBillingAttachmentAsFactura(attachment) {
           compareResult.message || 'Se encontraron incongruencias.',
           '',
           'Detalles:',
-          ...(compareResult.issues || []).map(issue => `- ${issue}`)
+          ...compareIssues.map(issue => `- ${issue}`)
         ].join('\n'),
         `
           <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
@@ -2845,6 +2932,10 @@ async function processBillingAttachmentAsFactura(attachment) {
           ? 'No disponible'
           : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
 
+        const emergencyEmptyUploadWarning = criticalAlert.emptyUploadPattern?.shouldWarnEmptyUpload
+          ? 'REVISAR SI SE HA SUBIDO EL ALBARÁN BIEN PORQUE SALE COMO VACÍO O CON MUCHOS ERRORES'
+          : null;
+
         await sendEmailNotification(
           `ERROR IMPORTANTE (${attachment?.filename || 'archivo'})`,
           [
@@ -2855,6 +2946,7 @@ async function processBillingAttachmentAsFactura(attachment) {
             `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
             `Confianza IA: ${confidenceLabel}`,
             `Albaranes con más de 6 incongruencias: ${criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno'}`,
+            ...(emergencyEmptyUploadWarning ? [emergencyEmptyUploadWarning] : []),
             `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
             'Links de albaranes fallados:',
             ...incongruentAlbaranLinks,
