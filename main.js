@@ -448,6 +448,15 @@ function buildDriveFileLink(fileId) {
   return `https://drive.google.com/file/d/${fileId}/view`;
 }
 
+function escapeHtml(value = '') {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function buildCongruentAlbaranesSummary(compareResult = {}) {
   const docs = Array.isArray(compareResult?.congruentAlbaranDocs)
     ? compareResult.congruentAlbaranDocs
@@ -902,7 +911,7 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
   return results;
 }
 
-async function sendEmailNotification(subject, text) {
+async function sendEmailNotification(subject, text, html = '') {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
     throw new Error('Sesión requerida para enviar email');
@@ -920,7 +929,8 @@ async function sendEmailNotification(subject, text) {
     sessionId,
     to: recipientEmail,
     subject,
-    text
+    text,
+    html
   });
 }
 
@@ -1826,7 +1836,7 @@ ipcMain.handle('send-email', async (event, payload) => {
     throw new Error('Sesión requerida para enviar email');
   }
 
-  const { to, subject, text } = payload || {};
+  const { to, subject, text, html } = payload || {};
   if (!to) {
     throw new Error('Destinatario requerido');
   }
@@ -1836,7 +1846,8 @@ ipcMain.handle('send-email', async (event, payload) => {
       sessionId,
       to,
       subject,
-      text
+      text,
+      html
     });
     return response.data;
   } catch (error) {
@@ -2768,6 +2779,22 @@ async function processBillingAttachmentAsFactura(attachment) {
           ? compareResult.incongruentAlbaranes.map((num) => `- Albarán ${num}: link no disponible`)
           : ['- No disponible']);
       const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
+      const htmlIncongruentLinks = (Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length)
+        ? compareResult.incongruentAlbaranDocs
+            .map((doc) => {
+              const num = escapeHtml(doc?.albaranNum || 'N/A');
+              const fileName = escapeHtml(doc?.fileName || 'Nombre no disponible');
+              const url = doc?.url || buildDriveFileLink(doc?.fileId);
+              if (url) {
+                return `<li>Albarán <strong>${num}</strong> (<strong>${fileName}</strong>): <a href="${escapeHtml(url)}">Abrir en Drive</a></li>`;
+              }
+              return `<li>Albarán <strong>${num}</strong> (<strong>${fileName}</strong>): No disponible</li>`;
+            })
+            .join('')
+        : incongruentAlbaranLinks.map(line => `<li>${escapeHtml(line)}</li>`).join('');
+      const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
+      const htmlIssues = (compareResult.issues || []).map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
+
       await sendEmailNotification(
         `Incongruencias en factura ${facturaRef}`,
         [
@@ -2785,7 +2812,26 @@ async function processBillingAttachmentAsFactura(attachment) {
           '',
           'Detalles:',
           ...(compareResult.issues || []).map(issue => `- ${issue}`)
-        ].join('\n')
+        ].join('\n'),
+        `
+          <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
+            <h2 style="margin:0 0 12px;color:#8a1c1c;">⚠️ <strong>Incongruencias en factura</strong></h2>
+            <p><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+            <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+            <p><strong>Seguridad del modelo:</strong> ${escapeHtml(confidenceLines.join(' | '))}</p>
+            <p><strong>Warnings de extracción:</strong> ${escapeHtml(extractionWarningsLines.join(' | '))}</p>
+            <p><strong>Factura original:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
+
+            <h3 style="margin:14px 0 8px;">❌ <strong>Albaranes con incongruencias</strong></h3>
+            <ul>${htmlIncongruentLinks || '<li>No disponible</li>'}</ul>
+
+            <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
+            <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
+
+            <h3 style="margin:14px 0 8px;">🧩 <strong>Detalles</strong></h3>
+            <ul>${htmlIssues || '<li>Sin detalle adicional</li>'}</ul>
+          </div>
+        `
       );
 
       if (criticalAlert.shouldSend) {
@@ -2814,7 +2860,19 @@ async function processBillingAttachmentAsFactura(attachment) {
             ...incongruentAlbaranLinks,
             '',
             'Acción requerida: revisión humana.'
-          ].join('\n')
+          ].join('\n'),
+          `
+            <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
+              <h2 style="margin:0 0 12px;color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
+              <p>Este archivo requiere <strong>revisión humana</strong>.</p>
+              <p><strong>Nombre archivo:</strong> <strong>${escapeHtml(attachment?.filename || 'N/A')}</strong></p>
+              <p><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+              <p><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
+              <p><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
+              <p><strong>Albaranes con más de 6 incongruencias:</strong> <strong>${escapeHtml(criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno')}</strong></p>
+              <p><strong>Link de Drive (factura):</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
+            </div>
+          `
         );
       }
     } else if (compareResult?.ok) {
@@ -2827,6 +2885,9 @@ async function processBillingAttachmentAsFactura(attachment) {
       const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
       const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
+      const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
+      const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
+
       await sendEmailNotification(
         `Factura ${facturaRef} bien`,
         [
@@ -2835,7 +2896,19 @@ async function processBillingAttachmentAsFactura(attachment) {
           ...confidenceLines,
           ...extractionWarningsLines,
           'Se han comparado correctamente y todo bien.'
-        ].join('\n')
+        ].join('\n'),
+        `
+          <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
+            <h2 style="margin:0 0 12px;color:#17693a;">✅ <strong>Factura validada correctamente</strong></h2>
+            <p><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+            <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+            <p><strong>Seguridad del modelo:</strong> ${escapeHtml(confidenceLines.join(' | '))}</p>
+            <p><strong>Warnings de extracción:</strong> ${escapeHtml(extractionWarningsLines.join(' | '))}</p>
+            <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
+            <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
+            <p><em>Se han comparado correctamente y todo bien.</em></p>
+          </div>
+        `
       );
 
       if (criticalAlert.lowConfidence) {
@@ -2857,7 +2930,17 @@ async function processBillingAttachmentAsFactura(attachment) {
             `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
             '',
             'Acción requerida: revisión humana.'
-          ].join('\n')
+          ].join('\n'),
+          `
+            <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
+              <h2 style="margin:0 0 12px;color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
+              <p>Se detectó <strong>baja confianza de IA</strong>. Requiere revisión humana.</p>
+              <p><strong>Nombre archivo:</strong> <strong>${escapeHtml(attachment?.filename || 'N/A')}</strong></p>
+              <p><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+              <p><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
+              <p><strong>Link de Drive (factura):</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
+            </div>
+          `
         );
       }
     }
