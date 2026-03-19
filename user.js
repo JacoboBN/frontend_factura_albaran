@@ -1206,7 +1206,32 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           ...incongruentAlbaranLinks,
                           '',
                           'Acción requerida: revisión humana.'
-                        ].join('\n')
+                        ].join('\n'),
+                        html: `
+                          <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+                            <h2 style="margin:0 0 12px; color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
+                            <p>Se han detectado <strong>incongruencias críticas</strong> y este archivo requiere <strong>revisión humana</strong>.</p>
+
+                            <div style="background:#fff6f6; border:1px solid #f0d7d7; border-radius:8px; padding:12px; margin:12px 0;">
+                              <p style="margin:0 0 6px;"><strong>Nombre archivo:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
+                              <p style="margin:0 0 6px;"><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+                              <p style="margin:0;"><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
+                            </div>
+
+                            <h3 style="margin:14px 0 8px; font-size:15px;">⚠️ Alertas</h3>
+                            <ul style="margin-top:0;">
+                              <li><strong>Confianza IA:</strong> ${escapeHtml(confidenceLabel)}</li>
+                              <li><strong>Albaranes con más de 6 incongruencias:</strong> ${escapeHtml(severeAlbaranesLabel)}</li>
+                              ${emergencyEmptyUploadWarning ? `<li><strong>${escapeHtml(emergencyEmptyUploadWarning)}</strong></li>` : ''}
+                            </ul>
+
+                            <h3 style="margin:14px 0 8px; font-size:15px;">🔗 Enlaces</h3>
+                            <p style="margin:0 0 8px;"><strong>Factura:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
+                            <ul style="margin-top:0;">${toHtmlList(incongruentAlbaranLinks, formatIncongruentAlbaranLineHtml, 'No disponible')}</ul>
+
+                            <p style="margin-top:12px;"><em>Acción requerida: revisión humana.</em></p>
+                          </div>
+                        `
                       });
                     }
                   } catch (emailError) {
@@ -1297,7 +1322,24 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
                           '',
                           'Acción requerida: revisión humana.'
-                        ].join('\n')
+                        ].join('\n'),
+                        html: `
+                          <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+                            <h2 style="margin:0 0 12px; color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
+                            <p>Se ha detectado <strong>baja confianza de IA</strong>. Este archivo requiere <strong>revisión humana</strong>.</p>
+
+                            <div style="background:#fff6f6; border:1px solid #f0d7d7; border-radius:8px; padding:12px; margin:12px 0;">
+                              <p style="margin:0 0 6px;"><strong>Nombre archivo:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
+                              <p style="margin:0 0 6px;"><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+                              <p style="margin:0;"><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
+                            </div>
+
+                            <h3 style="margin:14px 0 8px; font-size:15px;">🔗 Enlace</h3>
+                            <p style="margin:0;"><strong>Factura:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
+
+                            <p style="margin-top:12px;"><em>Acción requerida: revisión humana.</em></p>
+                          </div>
+                        `
                       });
                     }
                   } catch (emailOkError) {
@@ -2339,6 +2381,12 @@ function renderQueue() {
     const wrapper = document.createElement('div');
     wrapper.className = 'queue-item';
 
+    const headerRow = document.createElement('div');
+    headerRow.style.display = 'flex';
+    headerRow.style.alignItems = 'center';
+    headerRow.style.justifyContent = 'space-between';
+    headerRow.style.gap = '8px';
+
     const name = document.createElement('div');
     name.className = 'file-name';
     name.textContent = item.fileName;
@@ -2377,6 +2425,7 @@ function renderQueue() {
       const controls = document.createElement('div');
       controls.style.display = 'flex';
       controls.style.justifyContent = 'flex-end';
+      controls.style.alignItems = 'center';
 
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
@@ -2409,10 +2458,11 @@ function renderQueue() {
       });
 
       controls.appendChild(cancelBtn);
-      wrapper.appendChild(controls);
+      headerRow.appendChild(controls);
     }
 
-    wrapper.appendChild(name);
+    headerRow.prepend(name);
+    wrapper.appendChild(headerRow);
     wrapper.appendChild(statusRow);
 
     queueList.appendChild(wrapper);
