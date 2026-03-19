@@ -36,12 +36,37 @@ const backendAlertTitle = document.getElementById('backend-alert-title');
 const backendAlertMessage = document.getElementById('backend-alert-message');
 const backendAlertHelp = document.getElementById('backend-alert-help');
 const backendAlertClose = document.getElementById('backend-alert-close');
+const compareModeTotalesBtn = document.getElementById('compare-mode-totales');
+const compareModeComplejoBtn = document.getElementById('compare-mode-complejo');
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const STARTUP_QUEUE_STEPS = ['Esperando', 'OCR', 'IA', 'Moviendo', 'Movido'];
 const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Comparando', 'Comparado', 'Email'];
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
+let currentCompareMode = 'totales';
+
+function setCompareMode(mode = 'totales') {
+  const normalized = String(mode || '').toLowerCase() === 'complejo' ? 'complejo' : 'totales';
+  currentCompareMode = normalized;
+
+  if (compareModeTotalesBtn) {
+    compareModeTotalesBtn.classList.toggle('active', normalized === 'totales');
+  }
+  if (compareModeComplejoBtn) {
+    compareModeComplejoBtn.classList.toggle('active', normalized === 'complejo');
+  }
+}
+
+if (compareModeTotalesBtn) {
+  compareModeTotalesBtn.addEventListener('click', () => setCompareMode('totales'));
+}
+
+if (compareModeComplejoBtn) {
+  compareModeComplejoBtn.addEventListener('click', () => setCompareMode('complejo'));
+}
+
+setCompareMode('totales');
 
 function enqueueUploadFlow(task, meta = {}) {
   const runTask = async () => {
@@ -1143,7 +1168,8 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                 updateQueueStep(item.queueId, 'Comparando');
                 const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
                   facturaAnalysisText: analysisText,
-                  rootFolderName: parentFolderName
+                  rootFolderName: parentFolderName,
+                  compareMode: currentCompareMode
                 });
                 updateQueueStep(item.queueId, 'comparado');
 

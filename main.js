@@ -600,6 +600,19 @@ function numbersClose(a, b, tolerance) {
   return Math.abs(a - b) <= tolerance;
 }
 
+function parseComparableNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const text = String(value).trim();
+  if (!text || text.toLowerCase() === 'nan') return null;
+  const normalized = text.replace(/\./g, '').replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function compareArticleMaps(facturaMap, albaranMap) {
   const issues = [];
   const qtyTolerance = 0.01;
@@ -2522,7 +2535,7 @@ async function downloadDriveFileToString(fileMeta) {
   return text;
 }
 
-async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName }) {
+async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName, compareMode = 'complejo' }) {
   const parsed = parseFacturaAnalysis(facturaAnalysisText);
   if (!parsed || !parsed.albaranNumbers.length) {
     return {
@@ -2564,6 +2577,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   const incongruentAlbaranes = [];
   const incongruentAlbaranDocs = [];
   const congruentAlbaranDocs = [];
+  const mode = String(compareMode || '').toLowerCase() === 'totales' ? 'totales' : 'complejo';
+  const facturaTotal = parseComparableNumber(parsed?.resumen?.total);
+  let sumatoriaTotalesAlbaranes = 0;
+  let hasMissingAlbaranTotals = false;
+  const albaranDocsByNum = new Map();
 
   for (const albaranNum of parsed.albaranNumbers) {
     let sourceFile = null;
@@ -2583,7 +2601,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     const albaranLines = parseJsonLines(albaranText);
     const facturaLinesForAlbaran = facturaByAlbaran.get(albaranNum) || [];
 
-    if (!facturaLinesForAlbaran.length) {
+    if (mode === 'complejo' && !facturaLinesForAlbaran.length) {
       overallIssues.push(`No hay artículos de la factura para el albarán ${albaranNum}.`);
       incongruentAlbaranes.push(albaranNum);
       continue;
@@ -2595,25 +2613,61 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       sourceFile = sourceFiles.find(file => (file.name || '').toLowerCase() === sourceFileName.toLowerCase()) || null;
     }
 
-    const facturaMap = aggregateArticles(facturaLinesForAlbaran, 'factura');
-    const albaranMap = aggregateArticles(albaranLines, 'albaran');
-    const issues = compareArticleMaps(facturaMap, albaranMap);
-    if (issues.length) {
-      overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
-      incongruentAlbaranes.push(albaranNum);
-      incongruentAlbaranDocs.push({
-        albaranNum,
-        fileId: sourceFile?.id || null,
-        fileName: sourceFile?.name || sourceFileName || null,
-        url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
-      });
-    } else {
-      congruentAlbaranDocs.push({
-        albaranNum,
-        fileId: sourceFile?.id || null,
-        fileName: sourceFile?.name || sourceFileName || null,
-        url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
-      });
+    albaranDocsByNum.set(albaranNum, {
+      albaranNum,
+      fileId: sourceFile?.id || null,
+      fileName: sourceFile?.name || sourceFileName || null,
+      url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+    });
+
+    if (mode === 'totales') {
+      const totalName = `Total${albaranNum}Alb.txt`;
+      const totalFiles = await findDriveFileInFolder(noComparadoFolder.id, totalName);
+      const totalTxt = totalFiles.find(file => (file.name || '').toLowerCase() === totalName.toLowerCase()) || totalFiles[0];
+
+      if (!totalTxt) {
+        hasMissingAlbaranTotals = true;
+        overallIssues.push(`No se encontró ${totalName} para comparar por totales.`);
+      } else {
+        const totalText = await downloadDriveFileToString(totalTxt);
+        let totalObj = null;
+        try {
+          totalObj = JSON.parse((totalText || '').split(/\r?\n/).find(line => line.trim()) || '{}');
+        } catch (e) {
+          totalObj = null;
+        }
+
+        const totalAlbaran = parseComparableNumber(totalObj?.total);
+        if (totalAlbaran === null) {
+          hasMissingAlbaranTotals = true;
+          overallIssues.push(`Total inválido en ${totalName}.`);
+        } else {
+          sumatoriaTotalesAlbaranes += totalAlbaran;
+        }
+      }
+    }
+
+    if (mode === 'complejo') {
+      const facturaMap = aggregateArticles(facturaLinesForAlbaran, 'factura');
+      const albaranMap = aggregateArticles(albaranLines, 'albaran');
+      const issues = compareArticleMaps(facturaMap, albaranMap);
+      if (issues.length) {
+        overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
+        incongruentAlbaranes.push(albaranNum);
+        incongruentAlbaranDocs.push({
+          albaranNum,
+          fileId: sourceFile?.id || null,
+          fileName: sourceFile?.name || sourceFileName || null,
+          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+        });
+      } else {
+        congruentAlbaranDocs.push({
+          albaranNum,
+          fileId: sourceFile?.id || null,
+          fileName: sourceFile?.name || sourceFileName || null,
+          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+        });
+      }
     }
 
     try {
@@ -2628,6 +2682,35 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       log.warn(`No se pudo mover albarán ${albaranNum} a Documentos:`, moveError);
     }
     matchedAlbaranes.push(albaranNum);
+  }
+
+  if (mode === 'totales') {
+    if (facturaTotal === null) {
+      overallIssues.push('Total de factura inválido para comparar por totales.');
+    }
+
+    if (!hasMissingAlbaranTotals && facturaTotal !== null) {
+      const totalTolerance = 0.5;
+      if (!numbersClose(facturaTotal, sumatoriaTotalesAlbaranes, totalTolerance)) {
+        overallIssues.push(
+          `Diferencia de totales: factura=${facturaTotal}, suma_albaranes=${sumatoriaTotalesAlbaranes}`
+        );
+      }
+    }
+
+    if (overallIssues.length) {
+      const incongruentes = matchedAlbaranes.length ? matchedAlbaranes : parsed.albaranNumbers;
+      incongruentAlbaranes.push(...incongruentes);
+      for (const num of incongruentes) {
+        const doc = albaranDocsByNum.get(num);
+        if (doc) incongruentAlbaranDocs.push(doc);
+      }
+    } else {
+      for (const num of matchedAlbaranes) {
+        const doc = albaranDocsByNum.get(num);
+        if (doc) congruentAlbaranDocs.push(doc);
+      }
+    }
   }
 
   if (!overallIssues.length) {
@@ -2661,12 +2744,12 @@ ipcMain.handle('compare-factura-albaranes', async (event, payload) => {
     throw new Error('Sesión requerida para comparar albaranes');
   }
 
-  const { facturaAnalysisText, rootFolderName } = payload || {};
+  const { facturaAnalysisText, rootFolderName, compareMode = 'complejo' } = payload || {};
   if (!facturaAnalysisText || !rootFolderName) {
     throw new Error('Datos insuficientes para comparar albaranes');
   }
 
-  return compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName });
+  return compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName, compareMode });
 });
 
 async function listDriveFilesInNoProcesado(rootFolderName) {
