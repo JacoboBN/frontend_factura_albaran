@@ -963,7 +963,11 @@ async function checkSession({ forceBillingSetup = false } = {}) {
       showStatus('Carpetas estándar verificadas en Drive.', 'success');
     } catch (folderError) {
       uiLog('error', 'checkSession:ensure-standard-folders:error', serializeUiError(folderError));
-      showStatus('Error al verificar carpetas estándar en Drive.', 'error');
+      showStatus(
+        'Error al verificar carpetas estándar en Drive.',
+        'error',
+        folderError?.message || String(folderError || '')
+      );
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
     // IMPORTANTE: quitar overlay antes de preguntar el email de facturas
@@ -1005,7 +1009,11 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
         await ipcRenderer.invoke('ensure-standard-folders');
         showStatus('Carpetas estándar verificadas en Drive.', 'success');
       } catch (folderError) {
-        showStatus('Error al verificar carpetas estándar en Drive.', 'error');
+        showStatus(
+          'Error al verificar carpetas estándar en Drive.',
+          'error',
+          folderError?.message || String(folderError || '')
+        );
         console.warn('No se pudieron crear carpetas estándar:', folderError);
       }
       const docType = (parentFolderName || '').toLowerCase().includes('factura') ? 'factura' : 'albaran';
@@ -2333,15 +2341,15 @@ logoutBtn.addEventListener('click', async () => {
 // (showUploadSection está implementada arriba con navegación mejorada)
 
 
-function showStatus(message, type) {
+function showStatus(message, type, details = '') {
   uiLog(type === 'error' ? 'error' : 'log', 'showStatus', { message, type });
   const status = document.getElementById('status');
   status.textContent = message;
   status.className = `status ${type}`;
   status.style.display = 'block';
 
-   if (type === 'error') {
-    showBackendAlert(message, 'showStatus');
+  if (type === 'error') {
+    showBackendAlert(message, details || 'showStatus');
   }
 
   if (type === 'success' || type === 'error') {
