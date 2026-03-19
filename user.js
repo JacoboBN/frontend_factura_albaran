@@ -31,6 +31,11 @@ const uploadDropModal = document.getElementById('upload-drop-modal');
 const uploadDropZone = document.getElementById('upload-drop-zone');
 const uploadDropClose = document.getElementById('upload-drop-close');
 const uploadDropTitle = document.getElementById('upload-drop-title');
+const backendAlert = document.getElementById('backend-alert');
+const backendAlertTitle = document.getElementById('backend-alert-title');
+const backendAlertMessage = document.getElementById('backend-alert-message');
+const backendAlertHelp = document.getElementById('backend-alert-help');
+const backendAlertClose = document.getElementById('backend-alert-close');
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const STARTUP_QUEUE_STEPS = ['Esperando', 'OCR', 'IA', 'Moviendo', 'Movido'];
@@ -98,6 +103,85 @@ function uiLog(level = 'log', message = '', data = undefined) {
   console[method](`${RENDERER_LOG_PREFIX} ${timestamp} ${message}`, data);
 }
 
+function classifyBackendError(input = '') {
+  const text = String(input || '').toLowerCase();
+  const hasBackendConnectivityIssue = (
+    text.includes('network error')
+    || text.includes('econnrefused')
+    || text.includes('econnreset')
+    || text.includes('etimedout')
+    || text.includes('timeout')
+    || text.includes('failed to fetch')
+    || text.includes('502')
+    || text.includes('503')
+    || text.includes('504')
+    || text.includes('backend')
+    || text.includes('error interno del servidor')
+  );
+
+  if (hasBackendConnectivityIssue) {
+    return {
+      title: 'No se pudo contactar con el backend',
+      help: 'Parece una caída o problema temporal del backend.\n\nQué hacer:\n1) Espera 1-2 minutos y vuelve a intentar.\n2) Si persiste, avisa a bgoptimizing@gmail.com con una captura del error.'
+    };
+  }
+
+  const hasPermissionIssue = (
+    text.includes('403')
+    || text.includes('forbidden')
+    || text.includes('permiso')
+    || text.includes('permisos')
+    || text.includes('solo administradores')
+    || text.includes('acceso denegado')
+  );
+
+  if (hasPermissionIssue) {
+    return {
+      title: 'No tienes permisos suficientes',
+      help: 'Tu usuario no tiene permisos para esta acción.\n\nQué hacer:\n1) Verifica que hayas iniciado sesión con la cuenta correcta.\n2) Pide al administrador que comparta la carpeta/función necesaria en Google Drive.\n3) Si debe funcionar y no funciona, escribe a bgoptimizing@gmail.com.'
+    };
+  }
+
+  const hasSessionIssue = (
+    text.includes('401')
+    || text.includes('sesión inválida')
+    || text.includes('sesion invalida')
+    || text.includes('sesión expirada')
+    || text.includes('session expired')
+    || text.includes('reauth')
+  );
+
+  if (hasSessionIssue) {
+    return {
+      title: 'Tu sesión ha caducado',
+      help: 'Parece un problema de autenticación.\n\nQué hacer:\n1) Cierra sesión y vuelve a iniciar sesión con Google.\n2) Repite la acción.\n3) Si sigue pasando, avisa a bgoptimizing@gmail.com.'
+    };
+  }
+
+  return null;
+}
+
+function showBackendAlert(message = '', details = '') {
+  if (!backendAlert || !backendAlertTitle || !backendAlertMessage || !backendAlertHelp) return;
+
+  const classified = classifyBackendError(`${message} ${details}`);
+  if (!classified) return;
+
+  backendAlertTitle.textContent = classified.title;
+  backendAlertMessage.textContent = String(message || 'Se ha producido un error en el backend.');
+  backendAlertHelp.textContent = classified.help;
+  backendAlert.classList.add('active');
+}
+
+function hideBackendAlert() {
+  if (!backendAlert) return;
+  backendAlert.classList.remove('active');
+}
+
+if (backendAlertClose) {
+  backendAlertClose.addEventListener('click', hideBackendAlert);
+}
+
 window.addEventListener('error', (event) => {
   uiLog('error', 'window.error', {
     message: event?.message,
@@ -112,6 +196,10 @@ window.addEventListener('unhandledrejection', (event) => {
   uiLog('error', 'window.unhandledrejection', {
     reason: serializeUiError(event?.reason) || event?.reason
   });
+
+  const reason = event?.reason;
+  const message = reason?.message || String(reason || 'Error desconocido');
+  showBackendAlert(message, 'unhandledrejection');
 });
 
 function guessMimeTypeFromPath(filePath = '') {
@@ -2251,6 +2339,10 @@ function showStatus(message, type) {
   status.textContent = message;
   status.className = `status ${type}`;
   status.style.display = 'block';
+
+   if (type === 'error') {
+    showBackendAlert(message, 'showStatus');
+  }
 
   if (type === 'success' || type === 'error') {
     setTimeout(() => { status.style.display = 'none'; }, 5000);

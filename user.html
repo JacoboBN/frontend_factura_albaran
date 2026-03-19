@@ -583,6 +583,65 @@
       text-align: center;
     }
 
+    .backend-alert {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      width: min(420px, calc(100vw - 24px));
+      background: #fff;
+      border: 1px solid #f2c4c4;
+      border-left: 6px solid #c62828;
+      border-radius: 10px;
+      box-shadow: 0 14px 35px rgba(0, 0, 0, 0.22);
+      z-index: 11000;
+      display: none;
+    }
+
+    .backend-alert.active {
+      display: block;
+    }
+
+    .backend-alert-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px 6px;
+    }
+
+    .backend-alert-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #7a1212;
+    }
+
+    .backend-alert-close {
+      border: none;
+      background: transparent;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      color: #666;
+    }
+
+    .backend-alert-body {
+      padding: 0 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 13px;
+      color: #2d2d2d;
+    }
+
+    .backend-alert-help {
+      background: #fdf4f4;
+      border: 1px solid #efcaca;
+      border-radius: 8px;
+      padding: 8px;
+      color: #5e2020;
+      white-space: pre-line;
+    }
+
     @keyframes spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
@@ -610,6 +669,17 @@
         </div>
         <div class="upload-drop-zone" id="upload-drop-zone">Drop here or click.</div>
         <div class="upload-drop-hint">Puedes arrastrar archivos o hacer click para seleccionarlos.</div>
+      </div>
+    </div>
+
+    <div class="backend-alert" id="backend-alert">
+      <div class="backend-alert-header">
+        <div class="backend-alert-title" id="backend-alert-title">Aviso del backend</div>
+        <button class="backend-alert-close" id="backend-alert-close" aria-label="Cerrar aviso">×</button>
+      </div>
+      <div class="backend-alert-body">
+        <div id="backend-alert-message">Se ha detectado un error de conexión.</div>
+        <div class="backend-alert-help" id="backend-alert-help"></div>
       </div>
     </div>
 

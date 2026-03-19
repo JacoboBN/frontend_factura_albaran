@@ -146,6 +146,65 @@
       background: #d4edda;
       color: #155724;
     }
+
+    .backend-alert {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      width: min(420px, calc(100vw - 24px));
+      background: #fff;
+      border: 1px solid #f2c4c4;
+      border-left: 6px solid #c62828;
+      border-radius: 10px;
+      box-shadow: 0 14px 35px rgba(0, 0, 0, 0.22);
+      z-index: 11000;
+      display: none;
+    }
+
+    .backend-alert.active {
+      display: block;
+    }
+
+    .backend-alert-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px 6px;
+    }
+
+    .backend-alert-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #7a1212;
+    }
+
+    .backend-alert-close {
+      border: none;
+      background: transparent;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      color: #666;
+    }
+
+    .backend-alert-body {
+      padding: 0 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 13px;
+      color: #2d2d2d;
+    }
+
+    .backend-alert-help {
+      background: #fdf4f4;
+      border: 1px solid #efcaca;
+      border-radius: 8px;
+      padding: 8px;
+      color: #5e2020;
+      white-space: pre-line;
+    }
   </style>
 </head>
 <body>
@@ -163,6 +222,17 @@
 
     <div id="status" class="status loading">Buscando el Excel en Drive...</div>
 
+    <div class="backend-alert" id="backend-alert">
+      <div class="backend-alert-header">
+        <div class="backend-alert-title" id="backend-alert-title">Aviso del backend</div>
+        <button class="backend-alert-close" id="backend-alert-close" aria-label="Cerrar aviso">×</button>
+      </div>
+      <div class="backend-alert-body">
+        <div id="backend-alert-message">Se ha detectado un error de conexión.</div>
+        <div class="backend-alert-help" id="backend-alert-help"></div>
+      </div>
+    </div>
+
     <div class="viewer-wrap">
       <div style="width:100%;">
         <div id="sheet-tabs" class="sheet-tabs"></div>
@@ -174,6 +244,11 @@
     const { ipcRenderer } = require('electron');
     const XLSX = require('xlsx');
     let driveUrl = '';
+    const backendAlert = document.getElementById('backend-alert');
+    const backendAlertTitle = document.getElementById('backend-alert-title');
+    const backendAlertMessage = document.getElementById('backend-alert-message');
+    const backendAlertHelp = document.getElementById('backend-alert-help');
+    const backendAlertClose = document.getElementById('backend-alert-close');
 
     const BD_LOG_PREFIX = '[Frontend-BD]';
 
@@ -223,6 +298,68 @@
       if (!el) return;
       el.textContent = message;
       el.className = `status ${type}`;
+
+      if (type === 'error') {
+        showBackendAlert(message);
+      }
+    }
+
+    function classifyBackendError(input = '') {
+      const text = String(input || '').toLowerCase();
+      const hasBackendConnectivityIssue = (
+        text.includes('network error')
+        || text.includes('econnrefused')
+        || text.includes('econnreset')
+        || text.includes('etimedout')
+        || text.includes('timeout')
+        || text.includes('failed to fetch')
+        || text.includes('502')
+        || text.includes('503')
+        || text.includes('504')
+        || text.includes('backend')
+        || text.includes('error interno del servidor')
+      );
+
+      if (hasBackendConnectivityIssue) {
+        return {
+          title: 'No se pudo contactar con el backend',
+          help: 'Parece una caída o problema temporal del backend.\n\nQué hacer:\n1) Espera 1-2 minutos y vuelve a intentar.\n2) Si persiste, avisa a bgoptimizing@gmail.com con una captura del error.'
+        };
+      }
+
+      const hasPermissionIssue = (
+        text.includes('403')
+        || text.includes('forbidden')
+        || text.includes('permiso')
+        || text.includes('permisos')
+        || text.includes('solo administradores')
+        || text.includes('acceso denegado')
+      );
+
+      if (hasPermissionIssue) {
+        return {
+          title: 'No tienes permisos suficientes',
+          help: 'Tu usuario no tiene permisos para esta acción.\n\nQué hacer:\n1) Verifica que hayas iniciado sesión con la cuenta correcta.\n2) Pide al administrador que comparta la carpeta/función necesaria en Google Drive.\n3) Si debe funcionar y no funciona, escribe a bgoptimizing@gmail.com.'
+        };
+      }
+
+      return null;
+    }
+
+    function showBackendAlert(message = '') {
+      if (!backendAlert || !backendAlertTitle || !backendAlertMessage || !backendAlertHelp) return;
+      const classified = classifyBackendError(message);
+      if (!classified) return;
+      backendAlertTitle.textContent = classified.title;
+      backendAlertMessage.textContent = String(message || 'Se ha producido un error en el backend.');
+      backendAlertHelp.textContent = classified.help;
+      backendAlert.classList.add('active');
+    }
+
+    if (backendAlertClose) {
+      backendAlertClose.addEventListener('click', () => {
+        backendAlert.classList.remove('active');
+      });
     }
 
     function renderWorkbook(workbook) {
