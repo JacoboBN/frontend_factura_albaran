@@ -799,6 +799,65 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function getAuthStoreKeys(purpose = 'primary') {
+  if (purpose === 'billing') {
+    return {
+      sessionIdKey: 'billingSessionId',
+      refreshTokenKey: 'billingRefreshToken'
+    };
+  }
+
+  return {
+    sessionIdKey: 'sessionId',
+    refreshTokenKey: 'refreshToken'
+  };
+}
+
+function getStoredAuth(purpose = 'primary') {
+  const keys = getAuthStoreKeys(purpose);
+  return {
+    sessionId: store.get(keys.sessionIdKey) || null,
+    refreshToken: store.get(keys.refreshTokenKey) || null
+  };
+}
+
+function setStoredAuth({ sessionId, refreshToken }, purpose = 'primary') {
+  const keys = getAuthStoreKeys(purpose);
+
+  if (sessionId) {
+    store.set(keys.sessionIdKey, sessionId);
+  }
+
+  if (refreshToken) {
+    store.set(keys.refreshTokenKey, refreshToken);
+  }
+}
+
+async function refreshSessionTokens(purpose = 'primary') {
+  const { sessionId, refreshToken } = getStoredAuth(purpose);
+  if (!sessionId) {
+    return null;
+  }
+
+  const response = await axios.post(`${BACKEND_URL}/auth/verify`, {
+    sessionId,
+    refreshToken
+  }, {
+    timeout: DEFAULT_TIMEOUT_MS
+  });
+
+  const nextSessionId = response?.data?.sessionId;
+  const nextRefreshToken = response?.data?.refreshToken;
+  if (nextSessionId || nextRefreshToken) {
+    setStoredAuth({
+      sessionId: nextSessionId,
+      refreshToken: nextRefreshToken
+    }, purpose);
+  }
+
+  return response?.data || null;
+}
+
 function isRetryableError(error) {
   const code = error?.code || '';
   const status = error?.response?.status;
@@ -838,6 +897,29 @@ async function postWithRetry(url, data, options = {}) {
       });
       return await axios.post(url, data, { timeout, ...axiosOptions });
     } catch (error) {
+      const status = Number(error?.response?.status || 0);
+      const allowAuthRefresh = options.allowAuthRefresh !== false;
+      const isAuthEndpoint = /\/auth\/(verify|logout)\b/.test(String(url || ''));
+      const refreshedKey = '__authRefreshTried';
+
+      if (
+        status === 401
+        && allowAuthRefresh
+        && !isAuthEndpoint
+        && !options[refreshedKey]
+      ) {
+        try {
+          await refreshSessionTokens('primary');
+          options[refreshedKey] = true;
+          continue;
+        } catch (refreshError) {
+          mainLog('warn', 'postWithRetry:auth-refresh-failed', {
+            url,
+            error: serializeError(refreshError)
+          });
+        }
+      }
+
       if (attempt >= retries || !isRetryableError(error)) {
         mainLog('error', 'postWithRetry:final-error', {
           url,
@@ -1028,12 +1110,16 @@ async function uploadLocalFileToDrive(sessionId, filePath, targetFolderId) {
   }
   formData.append('file', fs.createReadStream(filePath));
 
-  const response = await axios.post(`${BACKEND_URL}/drive/upload`, formData, {
-    headers: {
-      ...formData.getHeaders()
-    },
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity
+  const response = await postWithRetry(`${BACKEND_URL}/drive/upload`, formData, {
+    timeout: 60000,
+    retries: 2,
+    axiosOptions: {
+      headers: {
+        ...formData.getHeaders()
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    }
   });
 
   return response.data;
@@ -1207,10 +1293,7 @@ const startupScanState = {
 };
 
 function resetSessionOnAppStart() {
-  store.delete('sessionId');
-  store.delete('billingSessionId');
-  store.delete('billingEmail');
-  store.delete('billingMode');
+  // Mantener sesión persistida entre reinicios para soportar refresh token.
 }
 
 function createWindow() {
@@ -1325,29 +1408,32 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
     const { authUrl, sessionId } = response.data;
     
     // Guardar sessionId temporal según propósito
-    if (purpose === 'billing') {
-      store.set('billingSessionId', sessionId);
-    } else {
-      store.set('sessionId', sessionId);
-    }
+    setStoredAuth({ sessionId, refreshToken: null }, purpose);
     
     // Abrir navegador externo para login
     await shell.openExternal(authUrl);
     
     // Esperar a que el usuario complete el login (polling)
-    const userData = await waitForAuth(sessionId);
+    const userData = await waitForAuth(sessionId, 60, purpose);
+    const verifiedSessionId = userData?.sessionId || sessionId;
+    const verifiedRefreshToken = userData?.refreshToken || null;
+    setStoredAuth({
+      sessionId: verifiedSessionId,
+      refreshToken: verifiedRefreshToken
+    }, purpose);
 
     if (purpose === 'billing') {
       store.set('billingMode', 'separate');
-      store.set('billingSessionId', sessionId);
+      store.set('billingSessionId', verifiedSessionId);
       store.set('billingEmail', userData?.email || null);
       startBillingMonitor();
     } else {
-      store.set('sessionId', sessionId);
+      store.set('sessionId', verifiedSessionId);
 
       const mode = store.get('billingMode');
       if (mode === 'same') {
-        store.set('billingSessionId', sessionId);
+        store.set('billingSessionId', verifiedSessionId);
+        store.set('billingRefreshToken', verifiedRefreshToken);
         store.set('billingEmail', userData?.email || null);
       }
       startBillingMonitor();
@@ -1361,16 +1447,24 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
 });
 
 // Función para esperar autenticación
-async function waitForAuth(sessionId, maxAttempts = 60) {
+async function waitForAuth(sessionId, maxAttempts = 60, purpose = 'primary') {
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(resolve => setTimeout(resolve, 2000)); // Esperar 2 segundos
-    
+
     try {
+      const { refreshToken } = getStoredAuth(purpose);
       const response = await axios.post(`${BACKEND_URL}/auth/verify`, {
-        sessionId
+        sessionId,
+        refreshToken
       });
-      
+
       if (response.data.email) {
+        if (response?.data?.sessionId || response?.data?.refreshToken) {
+          setStoredAuth({
+            sessionId: response?.data?.sessionId,
+            refreshToken: response?.data?.refreshToken
+          }, purpose);
+        }
         return response.data;
       }
     } catch (error) {
@@ -1481,12 +1575,16 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
       formData.append('targetFolderId', uploadFolderId);
       formData.append('file', fs.createReadStream(p));
 
-      const response = await axios.post(`${BACKEND_URL}/drive/upload`, formData, {
-        headers: {
-          ...formData.getHeaders()
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
+      const response = await postWithRetry(`${BACKEND_URL}/drive/upload`, formData, {
+        timeout: 60000,
+        retries: 2,
+        axiosOptions: {
+          headers: {
+            ...formData.getHeaders()
+          },
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
+        }
       });
 
       results.push(response.data);
@@ -1783,15 +1881,24 @@ ipcMain.handle('get-billing-config', async () => {
 
 ipcMain.handle('set-billing-email-same', async () => {
   const primarySessionId = store.get('sessionId');
+  const primaryRefreshToken = store.get('refreshToken') || null;
   if (!primarySessionId) {
     throw new Error('No hay sesión principal activa');
   }
 
-  const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId: primarySessionId }, { retries: 1 });
+  const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, {
+    sessionId: primarySessionId,
+    refreshToken: primaryRefreshToken
+  }, { retries: 1, allowAuthRefresh: false });
   const email = verifyResp?.data?.email || null;
+  setStoredAuth({
+    sessionId: verifyResp?.data?.sessionId,
+    refreshToken: verifyResp?.data?.refreshToken
+  }, 'primary');
 
   store.set('billingMode', 'same');
-  store.set('billingSessionId', primarySessionId);
+  store.set('billingSessionId', verifyResp?.data?.sessionId || primarySessionId);
+  store.set('billingRefreshToken', verifyResp?.data?.refreshToken || primaryRefreshToken);
   store.set('billingEmail', email);
   startBillingMonitor();
 
@@ -2689,11 +2796,13 @@ async function scanNoProcesado(trigger = 'startup') {
 // Cerrar sesión
 ipcMain.handle('logout', async () => {
   const sessionId = store.get('sessionId');
+  const refreshToken = store.get('refreshToken') || null;
 
   try {
     await postWithRetry(`${BACKEND_URL}/auth/logout`, {
-      sessionId
-    });
+      sessionId,
+      refreshToken
+    }, { allowAuthRefresh: false });
   } catch (error) {
     console.error('Error en logout:', error);
   }
