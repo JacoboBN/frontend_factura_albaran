@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const path = require('path');
@@ -1684,6 +1684,32 @@ ipcMain.handle('open-external', async (event, url) => {
 ipcMain.handle('open-bd-window', async () => {
   openBdWindow();
   return { success: true };
+});
+
+ipcMain.handle('notify-tasks-completed', async () => {
+  const title = 'Tareas completadas';
+  const body = 'Se han procesado todos los archivos de la cola.';
+
+  try {
+    if (Notification.isSupported()) {
+      const notification = new Notification({ title, body });
+      notification.show();
+      return { success: true, mode: 'notification' };
+    }
+
+    await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      buttons: ['OK'],
+      title,
+      message: title,
+      detail: body
+    });
+
+    return { success: true, mode: 'dialog' };
+  } catch (error) {
+    mainLog('error', 'notify-tasks-completed:error', serializeError(error));
+    return { success: false, error: error?.message || 'No se pudo mostrar la notificación' };
+  }
 });
 
 // Crear carpeta en Drive

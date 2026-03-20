@@ -17,6 +17,8 @@ const searchResults = document.getElementById('search-results');
 const queueList = document.getElementById('upload-queue-list');
 const uploadQueue = new Map();
 const canceledQueueIds = new Set();
+const TERMINAL_QUEUE_STATUSES = new Set(['Error', 'Cancelado', 'Enviado', 'Movido', 'Email']);
+let queueCompletionNotified = false;
 const startupStatusEl = document.getElementById('startup-status');
 const startupOverlay = document.getElementById('startup-overlay');
 const startupOverlayMessage = document.getElementById('startup-overlay-message');
@@ -2494,6 +2496,7 @@ function renderQueue() {
 
   if (uploadQueue.size === 0) {
     queueList.innerHTML = '<p style="color:#666">No hay archivos en cola.</p>';
+    queueCompletionNotified = false;
     return;
   }
 
@@ -2593,4 +2596,14 @@ function renderQueue() {
 
     queueList.appendChild(wrapper);
   });
+
+  const allFinished = Array.from(uploadQueue.values()).every((item) => TERMINAL_QUEUE_STATUSES.has(item.status));
+  if (allFinished && !queueCompletionNotified) {
+    queueCompletionNotified = true;
+    ipcRenderer.invoke('notify-tasks-completed').catch((error) => {
+      uiLog('error', 'notify-tasks-completed:error', serializeUiError(error));
+    });
+  } else if (!allFinished) {
+    queueCompletionNotified = false;
+  }
 }
