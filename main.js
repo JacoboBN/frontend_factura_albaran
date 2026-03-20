@@ -602,15 +602,36 @@ function numbersClose(a, b, tolerance) {
 
 function parseComparableNumber(value) {
   if (value === null || value === undefined) return null;
+
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
   }
 
-  const text = String(value).trim();
+  let text = String(value).trim();
   if (!text || text.toLowerCase() === 'nan') return null;
-  const normalized = text.replace(/\./g, '').replace(',', '.');
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+
+  // quitar espacios y €
+  text = text.replace(/[€\s]/g, '');
+
+  const hasComma = text.includes(',');
+  const hasDot = text.includes('.');
+
+  if (hasComma && hasDot) {
+    // Caso: 1.234,56 (ES)
+    if (text.lastIndexOf(',') > text.lastIndexOf('.')) {
+      text = text.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Caso: 1,234.56 (EN)
+      text = text.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    // Caso: 225,58
+    text = text.replace(',', '.');
+  }
+  // Caso: 225.58 → se deja igual
+
+  const num = Number(text);
+  return Number.isFinite(num) ? num : null;
 }
 
 function compareArticleMaps(facturaMap, albaranMap) {
