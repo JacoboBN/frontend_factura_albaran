@@ -14,6 +14,10 @@ const BILLING_EMAIL_ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
 const BILLING_POLL_INTERVAL_MS = 30000;
 const BILLING_PROCESS_DELAY_MS = 3000;
 const REPORTS_FOLDER_NAME = 'Informes - No tocar';
+const REPORTS_SUBFOLDERS = {
+  Albaranes: 'Albaranes-Informes',
+  Facturas: 'Facturas-Informes'
+};
 const LAST_EMAIL_FILE_NAME = 'Ult_email.txt';
 
 // Configurar logging para actualizaciones
@@ -2392,15 +2396,8 @@ async function getDriveFileByExactName(parentId, fileName) {
 }
 
 async function ensureInformesTrackingFile() {
-  let informesFolder = await getDriveFolderByName(null, REPORTS_FOLDER_NAME);
-  if (!informesFolder) {
-    const created = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
-      sessionId: store.get('sessionId'),
-      name: REPORTS_FOLDER_NAME,
-      parentId: null
-    });
-    informesFolder = { id: created.data.folderId, name: created.data.folderName || REPORTS_FOLDER_NAME };
-  }
+  const informesStructure = await ensureInformesFolders();
+  const informesFolder = informesStructure?.rootFolder;
 
   let lastEmailFile = await getDriveFileByExactName(informesFolder.id, LAST_EMAIL_FILE_NAME);
   if (!lastEmailFile) {
@@ -2415,8 +2412,93 @@ async function ensureInformesTrackingFile() {
 
   return {
     folder: informesFolder,
-    file: lastEmailFile
+    file: lastEmailFile,
+    structure: informesStructure
   };
+}
+
+async function ensureInformesFolders() {
+  let informesFolder = await getDriveFolderByName(null, REPORTS_FOLDER_NAME);
+  const created = [];
+  if (!informesFolder) {
+    const createdRoot = await postWithRetry(`${BACKEND_URL}/drive/create-folder`, {
+      sessionId: store.get('sessionId'),
+      name: REPORTS_FOLDER_NAME,
+      parentId: null
+    });
+    informesFolder = { id: createdRoot.data.folderId, name: createdRoot.data.folderName || REPORTS_FOLDER_NAME };
+    created.push(REPORTS_FOLDER_NAME);
+  }
+
+  const structures = {};
+  for (const [sourceRoot, informesSubfolderName] of Object.entries(REPORTS_SUBFOLDERS)) {
+    let sourceInformesFolder = await getDriveFolderByName(informesFolder.id, informesSubfolderName);
+    if (!sourceInformesFolder) {
+      sourceInformesFolder = await getOrCreateChildFolder(informesFolder.id, informesSubfolderName);
+      created.push(`${REPORTS_FOLDER_NAME}/${informesSubfolderName}`);
+    }
+
+    let noProcesado = await getDriveFolderByName(sourceInformesFolder.id, 'No Procesado');
+    if (!noProcesado) {
+      noProcesado = await getOrCreateChildFolder(sourceInformesFolder.id, 'No Procesado');
+      created.push(`${REPORTS_FOLDER_NAME}/${informesSubfolderName}/No Procesado`);
+    }
+
+    let noComparado = await getDriveFolderByName(sourceInformesFolder.id, 'No Comparado');
+    if (!noComparado) {
+      noComparado = await getOrCreateChildFolder(sourceInformesFolder.id, 'No Comparado');
+      created.push(`${REPORTS_FOLDER_NAME}/${informesSubfolderName}/No Comparado`);
+    }
+
+    let documentosInformes = await getDriveFolderByName(sourceInformesFolder.id, 'Documentos-Informes');
+    if (!documentosInformes) {
+      documentosInformes = await getOrCreateChildFolder(sourceInformesFolder.id, 'Documentos-Informes');
+      created.push(`${REPORTS_FOLDER_NAME}/${informesSubfolderName}/Documentos-Informes`);
+    }
+
+    structures[sourceRoot] = {
+      informesFolder: sourceInformesFolder,
+      noProcesado,
+      noComparado,
+      documentosInformes
+    };
+  }
+
+  return {
+    rootFolder: informesFolder,
+    bySourceRoot: structures,
+    created
+  };
+}
+
+async function getInformesNoComparadoFolder(sourceRootName = 'Albaranes') {
+  const normalized = normalizeDocumentType(sourceRootName) === 'factura' ? 'Facturas' : 'Albaranes';
+  const structure = await ensureInformesFolders();
+  const target = structure?.bySourceRoot?.[normalized]?.noComparado;
+  if (!target?.id) {
+    throw new Error(`No se pudo resolver Informes/${normalized} para No Comparado`);
+  }
+  return target;
+}
+
+async function getInformesNoProcesadoFolder(sourceRootName = 'Albaranes') {
+  const normalized = normalizeDocumentType(sourceRootName) === 'factura' ? 'Facturas' : 'Albaranes';
+  const structure = await ensureInformesFolders();
+  const target = structure?.bySourceRoot?.[normalized]?.noProcesado;
+  if (!target?.id) {
+    throw new Error(`No se pudo resolver Informes/${normalized} para No Procesado`);
+  }
+  return target;
+}
+
+async function getInformesDocumentosFolder(sourceRootName = 'Albaranes') {
+  const normalized = normalizeDocumentType(sourceRootName) === 'factura' ? 'Facturas' : 'Albaranes';
+  const structure = await ensureInformesFolders();
+  const target = structure?.bySourceRoot?.[normalized]?.documentosInformes;
+  if (!target?.id) {
+    throw new Error(`No se pudo resolver Informes/${normalized} para Documentos-Informes`);
+  }
+  return target;
 }
 
 async function readLastProcessedEmailState() {
@@ -2600,12 +2682,23 @@ async function ensureStandardFolders() {
   const childNames = ['No procesado', 'No comparado', 'Documentos'];
   const albaranes = await ensureRootFolderWithChildren('Albaranes', childNames);
   const facturas = await ensureRootFolderWithChildren('Facturas', childNames);
+  const informesFolders = await ensureInformesFolders();
   const informes = await ensureInformesTrackingFile();
-  const created = [...albaranes.created, ...facturas.created];
+  const created = [
+    ...albaranes.created,
+    ...facturas.created,
+    ...(informesFolders?.created || [])
+  ];
   if (informes?.folder?.name && !informes?.file?.id) {
     created.push(`${informes.folder.name}/${LAST_EMAIL_FILE_NAME}`);
   }
-  return { albaranes, facturas, informes, created };
+  return {
+    albaranes,
+    facturas,
+    informes,
+    informesFolders,
+    created
+  };
 }
 
 async function getOrCreateDocumentosFolder(rootFolderName) {
@@ -2622,29 +2715,46 @@ async function moveDriveFileToFolder(fileMeta, targetFolderId, currentFolderId) 
   await moveDriveFileWithBackoff(fileMeta.id, [targetFolderId], currentFolderId ? [currentFolderId] : []);
 }
 
+async function moveGeneratedTxtToInformesDocumentos(analysisText, informesSourceFolderIds = [], informesDocumentosFolderId) {
+  if (!analysisText || !informesDocumentosFolderId) return;
+
+  const sourceFolderIds = (Array.isArray(informesSourceFolderIds) ? informesSourceFolderIds : [informesSourceFolderIds]).filter(Boolean);
+  if (!sourceFolderIds.length) return;
+
+  const payload = buildTxtFilesFromAnalysis(analysisText);
+  if (!payload?.files?.length) return;
+
+  const txtFilesByName = new Map();
+  for (const folderId of sourceFolderIds) {
+    const txtFiles = await findDriveFileInFolder(folderId, '');
+    for (const file of txtFiles) {
+      if (!file?.id || !file?.name) continue;
+      txtFilesByName.set((file.name || '').toLowerCase(), { ...file, sourceFolderId: folderId });
+    }
+  }
+
+  for (const generated of payload.files) {
+    const match = txtFilesByName.get((generated?.name || '').toLowerCase());
+    if (match?.id) {
+      await moveDriveFileToFolder(match, informesDocumentosFolderId, match.sourceFolderId || null);
+    }
+  }
+}
+
 async function moveAlbaranAssetsToDocumentos({
   albaranNum,
-  albaranTxt,
   albaranLines,
-  noComparadoFolderId,
+  albaranesNoComparadoFolderId,
   documentosFolderId
 }) {
-  if (!albaranTxt || !documentosFolderId || !noComparadoFolderId) return;
-
-  await moveDriveFileToFolder(albaranTxt, documentosFolderId, noComparadoFolderId);
-
-  const totalFiles = await findDriveFileInFolder(noComparadoFolderId, 'Alb.txt');
-  const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, totalFiles);
-  if (totalTxt) {
-    await moveDriveFileToFolder(totalTxt, documentosFolderId, noComparadoFolderId);
-  }
+  if (!documentosFolderId || !albaranesNoComparadoFolderId) return;
 
   const sourceFileName = albaranLines.find(item => item?.source_file)?.source_file;
   if (sourceFileName) {
-    const sourceFiles = await findDriveFileInFolder(noComparadoFolderId, sourceFileName);
+    const sourceFiles = await findDriveFileInFolder(albaranesNoComparadoFolderId, sourceFileName);
     const sourceFile = sourceFiles.find(file => (file.name || '').toLowerCase() === sourceFileName.toLowerCase());
     if (sourceFile) {
-      await moveDriveFileToFolder(sourceFile, documentosFolderId, noComparadoFolderId);
+      await moveDriveFileToFolder(sourceFile, documentosFolderId, albaranesNoComparadoFolderId);
     }
   }
 }
@@ -2694,10 +2804,17 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     return { ok: false, message: 'No se encontró la carpeta "Albaranes" en Drive.', issues: [] };
   }
 
-  const noComparadoFolder = await getDriveFolderByName(albaranesRoot.id, 'No comparado');
-  if (!noComparadoFolder) {
+  const albaranesNoComparadoFolder = await getDriveFolderByName(albaranesRoot.id, 'No comparado');
+  if (!albaranesNoComparadoFolder) {
     return { ok: false, message: 'No se encontró carpeta No comparado en Drive.', issues: [], matchedAlbaranes: [], expectedAlbaranes: parsed.albaranNumbers };
   }
+
+  const informesNoProcesadoFolder = await getInformesNoProcesadoFolder('Albaranes');
+  const informesNoComparadoFolder = await getInformesNoComparadoFolder('Albaranes');
+  const facturasInformesNoProcesadoFolder = await getInformesNoProcesadoFolder('Facturas');
+  const facturasInformesNoComparadoFolder = await getInformesNoComparadoFolder('Facturas');
+  const albaranesInformesDocumentosFolder = await getInformesDocumentosFolder('Albaranes');
+  const facturasInformesDocumentosFolder = await getInformesDocumentosFolder('Facturas');
 
   const documentosFolder = await getOrCreateDocumentosFolder('Albaranes');
 
@@ -2721,11 +2838,16 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   let sumatoriaTotalesAlbaranes = 0;
   let hasMissingAlbaranTotals = false;
   const albaranDocsByNum = new Map();
-  const noComparadoFiles = await findDriveFileInFolder(noComparadoFolder.id, '');
+  const informesNoProcesadoFiles = await findDriveFileInFolder(informesNoProcesadoFolder.id, '');
+  const informesNoComparadoFilesOnly = await findDriveFileInFolder(informesNoComparadoFolder.id, '');
+  const informesNoComparadoFiles = [
+    ...informesNoProcesadoFiles.map(file => ({ ...file, sourceFolderId: informesNoProcesadoFolder.id })),
+    ...informesNoComparadoFilesOnly.map(file => ({ ...file, sourceFolderId: informesNoComparadoFolder.id }))
+  ];
 
   for (const albaranNum of parsed.albaranNumbers) {
     let sourceFile = null;
-    const albaranTxt = resolveAlbaranTxtFile(albaranNum, noComparadoFiles);
+    const albaranTxt = resolveAlbaranTxtFile(albaranNum, informesNoComparadoFiles);
 
     if (!albaranTxt) {
       overallIssues.push(`No se encontró .txt del albarán ${albaranNum} en No comparado.`);
@@ -2745,9 +2867,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
     const sourceFileName = albaranLines.find(item => item?.source_file)?.source_file;
     if (sourceFileName) {
-      const sourceFiles = await findDriveFileInFolder(noComparadoFolder.id, sourceFileName);
+      const sourceFiles = await findDriveFileInFolder(albaranesNoComparadoFolder.id, sourceFileName);
       sourceFile = sourceFiles.find(file => (file.name || '').toLowerCase() === sourceFileName.toLowerCase()) || null;
     }
+
+    const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, informesNoComparadoFiles);
 
     albaranDocsByNum.set(albaranNum, {
       albaranNum,
@@ -2757,8 +2881,6 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     });
 
     if (mode === 'totales') {
-      const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, noComparadoFiles);
-
       if (!totalTxt) {
         hasMissingAlbaranTotals = true;
         overallIssues.push(`No se encontró Total${albaranNum}Alb.txt (ni variantes) para comparar por totales.`);
@@ -2807,14 +2929,25 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     try {
       await moveAlbaranAssetsToDocumentos({
         albaranNum,
-        albaranTxt,
         albaranLines,
-        noComparadoFolderId: noComparadoFolder.id,
+        albaranesNoComparadoFolderId: albaranesNoComparadoFolder.id,
         documentosFolderId: documentosFolder.id
       });
     } catch (moveError) {
       log.warn(`No se pudo mover albarán ${albaranNum} a Documentos:`, moveError);
     }
+
+    try {
+      if (albaranTxt?.id) {
+        await moveDriveFileToFolder(albaranTxt, albaranesInformesDocumentosFolder.id, albaranTxt.sourceFolderId || null);
+      }
+      if (totalTxt?.id) {
+        await moveDriveFileToFolder(totalTxt, albaranesInformesDocumentosFolder.id, totalTxt.sourceFolderId || null);
+      }
+    } catch (txtMoveError) {
+      log.warn(`No se pudieron mover TXT del albarán ${albaranNum} a Documentos-Informes:`, txtMoveError);
+    }
+
     matchedAlbaranes.push(albaranNum);
   }
 
@@ -2845,6 +2978,16 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
         if (doc) congruentAlbaranDocs.push(doc);
       }
     }
+  }
+
+  try {
+    await moveGeneratedTxtToInformesDocumentos(
+      facturaAnalysisText,
+      [facturasInformesNoProcesadoFolder?.id, facturasInformesNoComparadoFolder?.id],
+      facturasInformesDocumentosFolder?.id
+    );
+  } catch (txtMoveError) {
+    log.warn('No se pudieron mover los TXT de factura a Documentos-Informes:', txtMoveError);
   }
 
   if (!overallIssues.length) {
@@ -2991,9 +3134,10 @@ async function scanNoProcesado(trigger = 'startup') {
 
     try {
       const noComparado = await getOrCreateNoComparadoFolder(fileMeta?.sourceRoot || 'Albaranes');
+      const informesNoComparado = await getInformesNoComparadoFolder(fileMeta?.sourceRoot || 'Albaranes');
       await processNoProcesadoFileWithEvents(fileMeta, queueId, {
         pipeline: {
-          txtFolderId: noComparado?.id || null,
+          txtFolderId: informesNoComparado?.id || null,
           sourceToFolderId: noComparado?.id || null
         }
       });
@@ -3113,6 +3257,7 @@ async function processBillingAttachmentAsFactura(attachment) {
   const facturasNoProcesadoId = standard?.facturas?.children?.['No procesado']?.id;
   const facturasNoComparadoId = standard?.facturas?.children?.['No comparado']?.id;
   const facturasDocumentosId = standard?.facturas?.children?.['Documentos']?.id;
+  const facturasInformesNoComparadoId = standard?.informesFolders?.bySourceRoot?.Facturas?.noComparado?.id;
   if (!facturasNoProcesadoId || !facturasNoComparadoId) {
     throw new Error('No se pudieron preparar carpetas Facturas');
   }
@@ -3131,7 +3276,7 @@ async function processBillingAttachmentAsFactura(attachment) {
       attachment?.filename || path.basename(localPath),
       'factura',
       {
-        txtFolderId: facturasNoComparadoId,
+        txtFolderId: facturasInformesNoComparadoId || null,
         sourceDriveFileId: uploadedId || null,
         sourceDriveFromFolderId: facturasNoProcesadoId,
         sourceDriveToFolderId: facturasNoComparadoId,
@@ -3152,29 +3297,6 @@ async function processBillingAttachmentAsFactura(attachment) {
 
       if (shouldMoveFactura) {
         await moveDriveFileWithBackoff(uploadedId, [facturasDocumentosId], [facturasNoComparadoId]);
-
-        const payload = buildTxtFilesFromAnalysis(analysisResult?.analysis || '', attachment?.filename || null);
-        if (payload?.files?.length) {
-          const txtContents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
-            sessionId,
-            folderId: facturasNoComparadoId
-          });
-
-          const txtFiles = (txtContents?.data?.files || [])
-            .filter(item => item.mimeType !== 'application/vnd.google-apps.folder');
-
-          const pendingMoves = [];
-          for (const file of payload.files) {
-            const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
-            if (!match?.id) continue;
-            pendingMoves.push({
-              fileId: match.id,
-              addParents: [facturasDocumentosId],
-              removeParents: [facturasNoComparadoId]
-            });
-          }
-          await moveDriveFilesWithBackoff(pendingMoves, { concurrency: 2 });
-        }
       }
     }
 

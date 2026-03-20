@@ -1114,9 +1114,11 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
       const targetLabel = `${parentFolderName}/No procesado`;
 
       let noComparadoFolder = null;
+      let informesNoComparadoFolder = null;
       let documentosFolder = null;
       try {
         noComparadoFolder = await getOrCreateChildFolder(parentFolder.id, 'No comparado');
+        informesNoComparadoFolder = await getOrCreateInformesNoComparadoFolder(parentFolderName);
         documentosFolder = await getOrCreateChildFolder(parentFolder.id, 'Documentos');
       } catch (folderError) {
         console.warn('No se pudo preparar carpeta No comparado:', folderError);
@@ -1175,7 +1177,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
             mimeType: item.mimeType,
             originalName: item.fileName,
             postProcess: {
-              txtFolderId: noComparadoFolder?.id || null,
+              txtFolderId: informesNoComparadoFolder?.id || null,
               sourceDriveFileId: item.uploadedFileId || null,
               sourceDriveFromFolderId: target?.id || null,
               sourceDriveToFolderId: noComparadoFolder?.id || null,
@@ -1559,18 +1561,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                     const removeId = noComparadoFolder?.id || target.id;
                     if (item.uploadedFileId) {
                       await ipcRenderer.invoke('move-file', item.uploadedFileId, [targetId], removeId ? [removeId] : []);
-                    }
-
-                    const payload = buildTxtFilesFromAnalysis(analysisText, item.fileName);
-                    if (payload?.files?.length) {
-                      const txtContents = await ipcRenderer.invoke('list-contents', noComparadoFolder?.id || target.id);
-                      const txtFiles = (txtContents?.files || []).filter(existing => existing.mimeType !== 'application/vnd.google-apps.folder');
-                      for (const file of payload.files) {
-                        const match = txtFiles.find(existing => (existing.name || '').toLowerCase() === (file.name || '').toLowerCase());
-                        if (match) {
-                          await ipcRenderer.invoke('move-file', match.id, [targetId], removeId ? [removeId] : []);
-                        }
-                      }
                     }
                   }
                 }
@@ -1980,6 +1970,26 @@ async function getOrCreateChildFolder(parentId, childName) {
   }
 
   return target;
+}
+
+async function getOrCreateInformesNoComparadoFolder(parentFolderName) {
+  let informesRoot = await findFolderByName('Informes - No tocar', true);
+  if (!informesRoot) {
+    const createdInformesRoot = await ipcRenderer.invoke('create-folder', 'Informes - No tocar', null);
+    informesRoot = {
+      id: createdInformesRoot.folderId,
+      name: createdInformesRoot.folderName || 'Informes - No tocar'
+    };
+  }
+
+  const informesSubfolderName = (parentFolderName || '').toLowerCase().includes('factura')
+    ? 'Facturas-Informes'
+    : 'Albaranes-Informes';
+
+  const informesSubfolder = await getOrCreateChildFolder(informesRoot.id, informesSubfolderName);
+  await getOrCreateChildFolder(informesSubfolder.id, 'No Procesado');
+  await getOrCreateChildFolder(informesSubfolder.id, 'Documentos-Informes');
+  return getOrCreateChildFolder(informesSubfolder.id, 'No Comparado');
 }
 
 async function navigateToFolderByName(targetName, rootOnly = false) {
