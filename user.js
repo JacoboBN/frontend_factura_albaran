@@ -813,6 +813,62 @@ function buildCongruentAlbaranesSummary(compareResult = {}) {
   return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible`);
 }
 
+function parseComparableNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+  let text = String(value).trim();
+  if (!text || text.toLowerCase() === 'nan') return null;
+  text = text.replace(/[€\s]/g, '');
+
+  const hasComma = text.includes(',');
+  const hasDot = text.includes('.');
+  if (hasComma && hasDot) {
+    if (text.lastIndexOf(',') > text.lastIndexOf('.')) {
+      text = text.replace(/\./g, '').replace(',', '.');
+    } else {
+      text = text.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    text = text.replace(',', '.');
+  }
+
+  const num = Number(text);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatAmountEuro(value) {
+  if (value === null || value === undefined || value === '') return 'No disponible';
+  const numeric = typeof value === 'number' ? value : parseComparableNumber(value);
+  if (!Number.isFinite(numeric)) {
+    const raw = String(value || '').trim();
+    if (!raw) return 'No disponible';
+    return raw.includes('€') ? raw : `${raw}€`;
+  }
+  return `${numeric.toFixed(2)}€`;
+}
+
+function addEuroSymbolToAmounts(text = '') {
+  const input = String(text || '');
+  return input
+    .replace(/(factura=)([-+]?\d*\.?\d+)(?!€)/gi, '$1$2€')
+    .replace(/(albar[aá]n=)([-+]?\d*\.?\d+)(?!€)/gi, '$1$2€')
+    .replace(/(suma_albaranes=)([-+]?\d*\.?\d+)(?!€)/gi, '$1$2€');
+}
+
+function extractFacturaTotalFromAnalysis(analysisText) {
+  try {
+    const sections = extractAnalysisSections(analysisText);
+    if (!sections?.resumenRaw) return null;
+    const resumenLine = sections.resumenRaw.split(/\r?\n/).find(line => line.trim());
+    if (!resumenLine) return null;
+    const resumenObj = JSON.parse(resumenLine);
+    return parseComparableNumber(resumenObj?.total);
+  } catch (e) {
+    return null;
+  }
+}
+
 async function getCurrentSessionEmail() {
   const info = await ipcRenderer.invoke('get-user-info');
   const email = info?.email || null;
@@ -1190,13 +1246,19 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                 const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisText);
                 const recipientEmail = await getCurrentSessionEmail();
                 const criticalAlert = buildCriticalAlertContext(compareResult, analysisText);
+                const facturaTotalValue = parseComparableNumber(compareResult?.facturaTotal ?? extractFacturaTotalFromAnalysis(analysisText));
+                const albaranesTotalValue = parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes);
+                const facturaTotalLabel = formatAmountEuro(facturaTotalValue);
+                const albaranesTotalLabel = formatAmountEuro(albaranesTotalValue);
 
                 if (compareResult && !compareResult.ok) {
                   try {
                     const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
                     const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
                     const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-                    const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes);
+                    const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
+                      .map(addEuroSymbolToAmounts);
+                    const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
                     const htmlIncongruentLinks = toHtmlList(
                       incongruentAlbaranLinks,
                       formatIncongruentAlbaranLineHtml,
@@ -1220,6 +1282,8 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         `Factura comparada: ${facturaRef}`,
                         `Nombre archivo factura: ${item.fileName || 'N/A'}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        `Total factura: ${facturaTotalLabel}`,
+                        `Total albaranes: ${albaranesTotalLabel}`,
                         '',
                         '=== RESUMEN DEL MODELO ===',
                         ...confidenceLines,
@@ -1239,7 +1303,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         ...congruentAlbaranSummary,
                         '',
                         '=== RESUMEN DE COMPARACIÓN ===',
-                        compareResult.message || 'Se encontraron incongruencias.',
+                        compareMessage,
                         '',
                         '=== DETALLES ===',
                         ...compareIssues.map(issue => `- ${issue}`)
@@ -1251,7 +1315,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           <div style="background:#f8f9fb; border:1px solid #e6e9ef; border-radius:8px; padding:12px; margin-bottom:12px;">
                             <p style="margin:0 0 6px;"><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
                             <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
-                            <p style="margin:0;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+                            <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+                            <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+                            <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
                           </div>
 
                           <div style="margin: 14px 0;">
@@ -1279,7 +1345,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
                           <div style="margin: 14px 0;">
                             <h3 style="margin:0 0 8px; font-size:15px;">📌 Resumen</h3>
-                            <p style="margin:0;">${escapeHtml(compareResult.message || 'Se encontraron incongruencias.')}</p>
+                            <p style="margin:0;">${escapeHtml(compareMessage)}</p>
                           </div>
 
                           <div style="margin: 14px 0;">
@@ -1318,6 +1384,8 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           `Nombre archivo: ${item.fileName || 'N/A'}`,
                           `Número de factura: ${facturaRef}`,
                           `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
+                          `Total factura: ${facturaTotalLabel}`,
+                          `Total albaranes: ${albaranesTotalLabel}`,
                           '',
                           '=== ALERTAS ===',
                           `Confianza IA: ${confidenceLabel}`,
@@ -1339,7 +1407,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                             <div style="background:#fff6f6; border:1px solid #f0d7d7; border-radius:8px; padding:12px; margin:12px 0;">
                               <p style="margin:0 0 6px;"><strong>Nombre archivo:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
                               <p style="margin:0 0 6px;"><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-                              <p style="margin:0;"><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
+                              <p style="margin:0 0 6px;"><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
+                              <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+                              <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
                             </div>
 
                             <h3 style="margin:14px 0 8px; font-size:15px;">⚠️ Alertas</h3>
@@ -1381,6 +1451,8 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         `Factura comparada: ${facturaRef}`,
                         `Nombre archivo factura: ${item.fileName || 'N/A'}`,
                         `Albaranes comparados: ${albaranesLabel}`,
+                        `Total factura: ${facturaTotalLabel}`,
+                        `Total albaranes: ${albaranesTotalLabel}`,
                         '',
                         '=== ALBARANES CORRECTOS (número y nombre) ===',
                         'Albaranes correctos (número y nombre guardado):',
@@ -1400,7 +1472,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           <div style="background:#f6fbf8; border:1px solid #dcefe3; border-radius:8px; padding:12px; margin-bottom:12px;">
                             <p style="margin:0 0 6px;"><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
                             <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
-                            <p style="margin:0;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+                            <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+                            <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+                            <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
                           </div>
 
                           <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
@@ -1438,6 +1512,8 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           `Nombre archivo: ${item.fileName || 'N/A'}`,
                           `Número de factura: ${facturaRef}`,
                           'Albaranes fallados: N/A',
+                          `Total factura: ${facturaTotalLabel}`,
+                          `Total albaranes: ${albaranesTotalLabel}`,
                           '',
                           '=== ALERTAS ===',
                           `Confianza IA: ${confidenceLabel}`,
@@ -1455,7 +1531,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                             <div style="background:#fff6f6; border:1px solid #f0d7d7; border-radius:8px; padding:12px; margin:12px 0;">
                               <p style="margin:0 0 6px;"><strong>Nombre archivo:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
                               <p style="margin:0 0 6px;"><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-                              <p style="margin:0;"><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
+                              <p style="margin:0 0 6px;"><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
+                              <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+                              <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
                             </div>
 
                             <h3 style="margin:14px 0 8px; font-size:15px;">🔗 Enlace</h3>

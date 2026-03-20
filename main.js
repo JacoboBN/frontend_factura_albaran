@@ -702,6 +702,25 @@ function parseComparableNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function formatAmountEuro(value) {
+  if (value === null || value === undefined || value === '') return 'No disponible';
+  const numeric = typeof value === 'number' ? value : parseComparableNumber(value);
+  if (!Number.isFinite(numeric)) {
+    const raw = String(value || '').trim();
+    if (!raw) return 'No disponible';
+    return raw.includes('€') ? raw : `${raw}€`;
+  }
+  return `${numeric.toFixed(2)}€`;
+}
+
+function addEuroSymbolToAmounts(text = '') {
+  const input = String(text || '');
+  return input
+    .replace(/(factura=)([-+]?\d*\.?\d+)(?!€)/gi, '$1$2€')
+    .replace(/(albar[aá]n=)([-+]?\d*\.?\d+)(?!€)/gi, '$1$2€')
+    .replace(/(suma_albaranes=)([-+]?\d*\.?\d+)(?!€)/gi, '$1$2€');
+}
+
 function compareArticleMaps(facturaMap, albaranMap) {
   const issues = [];
   const qtyTolerance = 0.01;
@@ -2651,6 +2670,7 @@ async function downloadDriveFileToString(fileMeta) {
 
 async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName, compareMode = 'complejo' }) {
   const parsed = parseFacturaAnalysis(facturaAnalysisText);
+  const parsedFacturaTotal = parseComparableNumber(parsed?.resumen?.total);
   if (!parsed || !parsed.albaranNumbers.length) {
     return {
       ok: true,
@@ -2660,7 +2680,9 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       expectedAlbaranes: [],
       incongruentAlbaranes: [],
       incongruentAlbaranDocs: [],
-      congruentAlbaranDocs: []
+      congruentAlbaranDocs: [],
+      facturaTotal: parsedFacturaTotal,
+      sumatoriaTotalesAlbaranes: null
     };
   }
 
@@ -2831,7 +2853,9 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       expectedAlbaranes: parsed.albaranNumbers,
       incongruentAlbaranes: [],
       incongruentAlbaranDocs: [],
-      congruentAlbaranDocs
+      congruentAlbaranDocs,
+      facturaTotal,
+      sumatoriaTotalesAlbaranes: mode === 'totales' ? sumatoriaTotalesAlbaranes : null
     };
   }
 
@@ -2843,7 +2867,9 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     expectedAlbaranes: parsed.albaranNumbers,
     incongruentAlbaranes: [...new Set(incongruentAlbaranes)],
     incongruentAlbaranDocs,
-    congruentAlbaranDocs
+    congruentAlbaranDocs,
+    facturaTotal,
+    sumatoriaTotalesAlbaranes: mode === 'totales' ? sumatoriaTotalesAlbaranes : null
   };
 }
 
@@ -3159,6 +3185,10 @@ async function processBillingAttachmentAsFactura(attachment) {
       const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
       const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
+      const facturaTotalValue = parseComparableNumber(compareResult?.facturaTotal);
+      const albaranesTotalValue = parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes);
+      const facturaTotalLabel = formatAmountEuro(facturaTotalValue);
+      const albaranesTotalLabel = formatAmountEuro(albaranesTotalValue);
       const facturaDriveLink = buildDriveFileLink(uploadedId);
       const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
         ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'}: ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
@@ -3180,7 +3210,9 @@ async function processBillingAttachmentAsFactura(attachment) {
             .join('')
         : incongruentAlbaranLinks.map(line => `<li>${escapeHtml(line)}</li>`).join('');
       const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
-      const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes);
+      const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
+        .map(addEuroSymbolToAmounts);
+      const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
       const htmlIssues = compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
 
       await sendEmailNotification(
@@ -3188,6 +3220,8 @@ async function processBillingAttachmentAsFactura(attachment) {
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
+          `Total factura: ${facturaTotalLabel}`,
+          `Total albaranes: ${albaranesTotalLabel}`,
           ...confidenceLines,
           ...extractionWarningsLines,
           `Link factura original: ${facturaDriveLink || 'No disponible'}`,
@@ -3196,7 +3230,7 @@ async function processBillingAttachmentAsFactura(attachment) {
           '',
           'Albaranes correctos (número y nombre guardado):',
           ...congruentAlbaranSummary,
-          compareResult.message || 'Se encontraron incongruencias.',
+          compareMessage,
           '',
           'Detalles:',
           ...compareIssues.map(issue => `- ${issue}`)
@@ -3206,6 +3240,8 @@ async function processBillingAttachmentAsFactura(attachment) {
             <h2 style="margin:0 0 12px;color:#8a1c1c;">⚠️ <strong>Incongruencias en factura</strong></h2>
             <p><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
             <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+            <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+            <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
             <p><strong>Seguridad del modelo:</strong> ${escapeHtml(confidenceLines.join(' | '))}</p>
             <p><strong>Warnings de extracción:</strong> ${escapeHtml(extractionWarningsLines.join(' | '))}</p>
             <p><strong>Factura original:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
@@ -3245,6 +3281,8 @@ async function processBillingAttachmentAsFactura(attachment) {
             `Nombre archivo: ${attachment?.filename || 'N/A'}`,
             `Número de factura: ${facturaRef}`,
             `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
+            `Total factura: ${facturaTotalLabel}`,
+            `Total albaranes: ${albaranesTotalLabel}`,
             `Confianza IA: ${confidenceLabel}`,
             `Albaranes con más de 6 incongruencias: ${criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno'}`,
             ...(emergencyEmptyUploadWarning ? [emergencyEmptyUploadWarning] : []),
@@ -3261,6 +3299,8 @@ async function processBillingAttachmentAsFactura(attachment) {
               <p><strong>Nombre archivo:</strong> <strong>${escapeHtml(attachment?.filename || 'N/A')}</strong></p>
               <p><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
               <p><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
+              <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+              <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
               <p><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
               <p><strong>Albaranes con más de 6 incongruencias:</strong> <strong>${escapeHtml(criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno')}</strong></p>
               <p><strong>Link de Drive (factura):</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
@@ -3286,6 +3326,8 @@ async function processBillingAttachmentAsFactura(attachment) {
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
+          `Total factura: ${facturaTotalLabel}`,
+          `Total albaranes: ${albaranesTotalLabel}`,
           ...confidenceLines,
           ...extractionWarningsLines,
           'Se han comparado correctamente y todo bien.'
@@ -3295,6 +3337,8 @@ async function processBillingAttachmentAsFactura(attachment) {
             <h2 style="margin:0 0 12px;color:#17693a;">✅ <strong>Factura validada correctamente</strong></h2>
             <p><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
             <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+            <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+            <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
             <p><strong>Seguridad del modelo:</strong> ${escapeHtml(confidenceLines.join(' | '))}</p>
             <p><strong>Warnings de extracción:</strong> ${escapeHtml(extractionWarningsLines.join(' | '))}</p>
             <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
@@ -3319,6 +3363,8 @@ async function processBillingAttachmentAsFactura(attachment) {
             `Nombre archivo: ${attachment?.filename || 'N/A'}`,
             `Número de factura: ${facturaRef}`,
             'Albaranes fallados: N/A',
+            `Total factura: ${facturaTotalLabel}`,
+            `Total albaranes: ${albaranesTotalLabel}`,
             `Confianza IA: ${confidenceLabel}`,
             `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
             '',
@@ -3331,6 +3377,8 @@ async function processBillingAttachmentAsFactura(attachment) {
               <p><strong>Nombre archivo:</strong> <strong>${escapeHtml(attachment?.filename || 'N/A')}</strong></p>
               <p><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
               <p><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
+              <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+              <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
               <p><strong>Link de Drive (factura):</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
             </div>
           `
