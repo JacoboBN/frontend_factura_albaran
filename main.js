@@ -220,6 +220,74 @@ function normalizeArticleName(value) {
     .trim();
 }
 
+function normalizeAlbaranNumberForMatch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function buildAlbaranFileBaseCandidates(albaranNum) {
+  const raw = String(albaranNum || '').trim();
+  if (!raw) return [];
+
+  const candidates = [
+    raw,
+    sanitizeFileName(raw),
+    raw.replace(/[\\/]+/g, '_'),
+    raw.replace(/[\\/]+/g, '-'),
+    raw.replace(/[\\/\s]+/g, '_'),
+    raw.replace(/[\\/\s]+/g, '')
+  ];
+
+  return [...new Set(candidates.map(item => String(item || '').trim()).filter(Boolean))];
+}
+
+function stripAlbTxtSuffix(fileName = '') {
+  return String(fileName || '').replace(/alb\.txt$/i, '').trim();
+}
+
+function resolveAlbaranTxtFile(albaranNum, files = []) {
+  const candidates = buildAlbaranFileBaseCandidates(albaranNum);
+  const normalizedCandidates = new Set(candidates.map(normalizeAlbaranNumberForMatch).filter(Boolean));
+
+  const txtFiles = (Array.isArray(files) ? files : [])
+    .filter(file => /alb\.txt$/i.test(file?.name || ''))
+    .filter(file => !/^total/i.test(String(file?.name || '').trim()));
+
+  for (const file of txtFiles) {
+    const base = stripAlbTxtSuffix(file.name || '');
+    const normalizedBase = normalizeAlbaranNumberForMatch(base);
+    if (normalizedBase && normalizedCandidates.has(normalizedBase)) {
+      return file;
+    }
+  }
+
+  return null;
+}
+
+function resolveTotalAlbaranTxtFile(albaranNum, files = []) {
+  const candidates = buildAlbaranFileBaseCandidates(albaranNum);
+  const normalizedCandidates = new Set(candidates.map(normalizeAlbaranNumberForMatch).filter(Boolean));
+
+  const totalFiles = (Array.isArray(files) ? files : [])
+    .filter(file => /^total/i.test(String(file?.name || '').trim()))
+    .filter(file => /alb\.txt$/i.test(file?.name || ''));
+
+  for (const file of totalFiles) {
+    const name = String(file?.name || '').trim();
+    const withoutPrefix = name.replace(/^total/i, '');
+    const base = stripAlbTxtSuffix(withoutPrefix);
+    const normalizedBase = normalizeAlbaranNumberForMatch(base);
+    if (normalizedBase && normalizedCandidates.has(normalizedBase)) {
+      return file;
+    }
+  }
+
+  return null;
+}
+
 function parseJsonLines(text) {
   if (!text) return [];
   return text
@@ -2543,9 +2611,8 @@ async function moveAlbaranAssetsToDocumentos({
 
   await moveDriveFileToFolder(albaranTxt, documentosFolderId, noComparadoFolderId);
 
-  const totalName = `Total${albaranNum}Alb.txt`;
-  const totalFiles = await findDriveFileInFolder(noComparadoFolderId, totalName);
-  const totalTxt = totalFiles.find(file => (file.name || '').toLowerCase() === totalName.toLowerCase());
+  const totalFiles = await findDriveFileInFolder(noComparadoFolderId, 'Alb.txt');
+  const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, totalFiles);
   if (totalTxt) {
     await moveDriveFileToFolder(totalTxt, documentosFolderId, noComparadoFolderId);
   }
@@ -2612,7 +2679,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   const facturaArticulos = parsed.articulos || [];
   const facturaByAlbaran = new Map();
   facturaArticulos.forEach(item => {
-    const num = item.num_albaran;
+    const num = normalizeAlbaranNumberForMatch(item.num_albaran);
     if (!num) return;
     const list = facturaByAlbaran.get(num) || [];
     list.push(item);
@@ -2629,14 +2696,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   let sumatoriaTotalesAlbaranes = 0;
   let hasMissingAlbaranTotals = false;
   const albaranDocsByNum = new Map();
+  const noComparadoFiles = await findDriveFileInFolder(noComparadoFolder.id, '');
 
   for (const albaranNum of parsed.albaranNumbers) {
     let sourceFile = null;
-    const expectedName = `${albaranNum}Alb.txt`.toLowerCase();
-    const albaranFiles = await findDriveFileInFolder(noComparadoFolder.id, expectedName);
-    const albaranTxt = albaranFiles.find(file => (file.name || '').toLowerCase() === expectedName)
-      || albaranFiles.find(file => (file.name || '').toLowerCase().endsWith('alb.txt'))
-      || albaranFiles[0];
+    const albaranTxt = resolveAlbaranTxtFile(albaranNum, noComparadoFiles);
 
     if (!albaranTxt) {
       overallIssues.push(`No se encontró .txt del albarán ${albaranNum} en No comparado.`);
@@ -2646,7 +2710,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
     const albaranText = await downloadDriveFileToString(albaranTxt);
     const albaranLines = parseJsonLines(albaranText);
-    const facturaLinesForAlbaran = facturaByAlbaran.get(albaranNum) || [];
+    const facturaLinesForAlbaran = facturaByAlbaran.get(normalizeAlbaranNumberForMatch(albaranNum)) || [];
 
     if (mode === 'complejo' && !facturaLinesForAlbaran.length) {
       overallIssues.push(`No hay artículos de la factura para el albarán ${albaranNum}.`);
@@ -2668,13 +2732,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     });
 
     if (mode === 'totales') {
-      const totalName = `Total${albaranNum}Alb.txt`;
-      const totalFiles = await findDriveFileInFolder(noComparadoFolder.id, totalName);
-      const totalTxt = totalFiles.find(file => (file.name || '').toLowerCase() === totalName.toLowerCase()) || totalFiles[0];
+      const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, noComparadoFiles);
 
       if (!totalTxt) {
         hasMissingAlbaranTotals = true;
-        overallIssues.push(`No se encontró ${totalName} para comparar por totales.`);
+        overallIssues.push(`No se encontró Total${albaranNum}Alb.txt (ni variantes) para comparar por totales.`);
       } else {
         const totalText = await downloadDriveFileToString(totalTxt);
         let totalObj = null;
@@ -2687,7 +2749,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
         const totalAlbaran = parseComparableNumber(totalObj?.total);
         if (totalAlbaran === null) {
           hasMissingAlbaranTotals = true;
-          overallIssues.push(`Total inválido en ${totalName}.`);
+          overallIssues.push(`Total inválido en ${totalTxt.name || `Total${albaranNum}Alb.txt`}.`);
         } else {
           sumatoriaTotalesAlbaranes += totalAlbaran;
         }
