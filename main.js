@@ -942,14 +942,18 @@ function getStoredAuth(purpose = 'primary') {
   };
 }
 
-function setStoredAuth({ sessionId, refreshToken }, purpose = 'primary') {
+function setStoredAuth({ sessionId, refreshToken } = {}, purpose = 'primary') {
   const keys = getAuthStoreKeys(purpose);
 
-  if (sessionId) {
+  if (sessionId === null) {
+    store.delete(keys.sessionIdKey);
+  } else if (sessionId !== undefined) {
     store.set(keys.sessionIdKey, sessionId);
   }
 
-  if (refreshToken) {
+  if (refreshToken === null) {
+    store.delete(keys.refreshTokenKey);
+  } else if (refreshToken !== undefined) {
     store.set(keys.refreshTokenKey, refreshToken);
   }
 }
@@ -1201,15 +1205,14 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
 }
 
 async function sendEmailNotification(subject, text, html = '') {
-  const sessionId = store.get('sessionId');
-  if (!sessionId) {
+  const auth = getStoredAuth('primary');
+  if (!auth?.sessionId) {
     throw new Error('Sesión requerida para enviar email');
   }
 
-  const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, {
-    sessionId
-  }, { retries: 1 });
-  const recipientEmail = verifyResp?.data?.email || null;
+  const verifyResp = await refreshSessionTokens('primary');
+  const recipientEmail = verifyResp?.email || null;
+  const sessionId = store.get('sessionId');
   if (!recipientEmail) {
     throw new Error('No se pudo obtener el email del usuario en sesión para enviar notificación');
   }
@@ -2936,7 +2939,7 @@ async function scanNoProcesado(trigger = 'startup') {
   }
 
   try {
-    await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId }, { retries: 1 });
+    await refreshSessionTokens('primary');
     await ensureStandardFolders();
   } catch (error) {
     if (error?.response?.status === 401) {
@@ -3047,8 +3050,8 @@ async function ensureBillingSessionReady() {
 
   if (billingSessionId) {
     try {
-      await postWithRetry(`${BACKEND_URL}/auth/verify`, { sessionId: billingSessionId }, { retries: 1 });
-      return billingSessionId;
+      await refreshSessionTokens('billing');
+      return store.get('billingSessionId') || billingSessionId;
     } catch (e) {
       billingSessionId = null;
       store.delete('billingSessionId');
