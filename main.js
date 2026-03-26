@@ -19,14 +19,15 @@ const REPORTS_SUBFOLDERS = {
   Facturas: 'Facturas-Informes'
 };
 const LAST_EMAIL_FILE_NAME = 'Ult_email.txt';
+const USE_REFRESH_TOKENS = process.env.NODE_ENV === 'production';
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
 
-// URL del backend en Render (siempre usa esta URL ya que el backend está en producción)
-const BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
+// URL del backend: usa BACKEND_URL si se define; si no, mantiene producción por defecto.
+const BACKEND_URL = process.env.BACKEND_URL || 'https://backend-factura-albaran.onrender.com';
 const DEFAULT_TIMEOUT_MS = 20000;
 const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
@@ -942,7 +943,7 @@ function getStoredAuth(purpose = 'primary') {
   const keys = getAuthStoreKeys(purpose);
   return {
     sessionId: store.get(keys.sessionIdKey) || null,
-    refreshToken: store.get(keys.refreshTokenKey) || null
+    refreshToken: USE_REFRESH_TOKENS ? (store.get(keys.refreshTokenKey) || null) : null
   };
 }
 
@@ -955,7 +956,9 @@ function setStoredAuth({ sessionId, refreshToken } = {}, purpose = 'primary') {
     store.set(keys.sessionIdKey, sessionId);
   }
 
-  if (refreshToken === null) {
+  if (!USE_REFRESH_TOKENS) {
+    store.delete(keys.refreshTokenKey);
+  } else if (refreshToken === null) {
     store.delete(keys.refreshTokenKey);
   } else if (refreshToken !== undefined) {
     store.set(keys.refreshTokenKey, refreshToken);
@@ -970,7 +973,7 @@ async function refreshSessionTokens(purpose = 'primary') {
 
   const response = await axios.post(`${BACKEND_URL}/auth/verify`, {
     sessionId,
-    refreshToken
+    refreshToken: USE_REFRESH_TOKENS ? refreshToken : null
   }, {
     timeout: DEFAULT_TIMEOUT_MS
   });
@@ -1421,7 +1424,10 @@ const startupScanState = {
 };
 
 function resetSessionOnAppStart() {
-  // Mantener sesión persistida entre reinicios para soportar refresh token.
+  if (!USE_REFRESH_TOKENS) {
+    store.delete('refreshToken');
+    store.delete('billingRefreshToken');
+  }
 }
 
 function createWindow() {
@@ -1561,7 +1567,11 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
       const mode = store.get('billingMode');
       if (mode === 'same') {
         store.set('billingSessionId', verifiedSessionId);
-        store.set('billingRefreshToken', verifiedRefreshToken);
+        if (USE_REFRESH_TOKENS) {
+          store.set('billingRefreshToken', verifiedRefreshToken);
+        } else {
+          store.delete('billingRefreshToken');
+        }
         store.set('billingEmail', userData?.email || null);
       }
       startBillingMonitor();
@@ -2035,14 +2045,14 @@ ipcMain.handle('get-billing-config', async () => {
 
 ipcMain.handle('set-billing-email-same', async () => {
   const primarySessionId = store.get('sessionId');
-  const primaryRefreshToken = store.get('refreshToken') || null;
+  const primaryRefreshToken = USE_REFRESH_TOKENS ? (store.get('refreshToken') || null) : null;
   if (!primarySessionId) {
     throw new Error('No hay sesión principal activa');
   }
 
   const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, {
     sessionId: primarySessionId,
-    refreshToken: primaryRefreshToken
+    refreshToken: USE_REFRESH_TOKENS ? primaryRefreshToken : null
   }, { retries: 1, allowAuthRefresh: false });
   const email = verifyResp?.data?.email || null;
   setStoredAuth({
@@ -2052,7 +2062,11 @@ ipcMain.handle('set-billing-email-same', async () => {
 
   store.set('billingMode', 'same');
   store.set('billingSessionId', verifyResp?.data?.sessionId || primarySessionId);
-  store.set('billingRefreshToken', verifyResp?.data?.refreshToken || primaryRefreshToken);
+  if (USE_REFRESH_TOKENS) {
+    store.set('billingRefreshToken', verifyResp?.data?.refreshToken || primaryRefreshToken);
+  } else {
+    store.delete('billingRefreshToken');
+  }
   store.set('billingEmail', email);
   startBillingMonitor();
 
@@ -3161,7 +3175,7 @@ async function scanNoProcesado(trigger = 'startup') {
 // Cerrar sesión
 ipcMain.handle('logout', async () => {
   const sessionId = store.get('sessionId');
-  const refreshToken = store.get('refreshToken') || null;
+  const refreshToken = USE_REFRESH_TOKENS ? (store.get('refreshToken') || null) : null;
 
   try {
     await postWithRetry(`${BACKEND_URL}/auth/logout`, {
