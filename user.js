@@ -8,8 +8,6 @@ const uploadSection = document.getElementById('upload-section');
 const loginBtn = document.getElementById('login-btn');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
-const clearSessionsBtn = document.getElementById('clear-sessions-btn');
-const clearSessionsBtnSidebar = document.getElementById('clear-sessions-btn-sidebar');
 const menuButtons = document.querySelectorAll('.menu-item');
 const tileButtons = document.querySelectorAll('.tile');
 
@@ -724,8 +722,9 @@ function buildIncongruentAlbaranesLinks(compareResult = {}) {
     return docs.map((doc) => {
       const num = doc?.albaranNum || 'N/A';
       const fileName = doc?.fileName || 'Nombre no disponible';
+      const totalDetectedLabel = formatAmountEuro(doc?.totalDetected);
       const url = doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible';
-      return `- Albarán ${num} (${fileName}): ${url}`;
+      return `- Albarán ${num} (${fileName}, total detectado: ${totalDetectedLabel}): ${url}`;
     });
   }
 
@@ -736,7 +735,7 @@ function buildIncongruentAlbaranesLinks(compareResult = {}) {
     return ['- No disponible'];
   }
 
-  return nums.map((num) => `- Albarán ${num} (nombre no disponible): link no disponible`);
+  return nums.map((num) => `- Albarán ${num} (nombre no disponible, total detectado: No disponible): link no disponible`);
 }
 
 function escapeHtml(value = '') {
@@ -791,7 +790,8 @@ function buildCongruentAlbaranesSummary(compareResult = {}) {
     return docs.map((doc) => {
       const num = doc?.albaranNum || 'N/A';
       const fileName = doc?.fileName || 'Nombre no disponible';
-      return `- Albarán ${num}: ${fileName}`;
+      const totalDetectedLabel = formatAmountEuro(doc?.totalDetected);
+      return `- Albarán ${num}: ${fileName} (total detectado: ${totalDetectedLabel})`;
     });
   }
 
@@ -812,7 +812,7 @@ function buildCongruentAlbaranesSummary(compareResult = {}) {
     return ['- No disponible'];
   }
 
-  return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible`);
+  return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible (total detectado: No disponible)`);
 }
 
 function parseComparableNumber(value) {
@@ -1279,7 +1279,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
-                      subject: `${item.fileName || 'Factura'} Incongruencias encontradas en factura ${facturaRef}`,
+                      subject: `⚠️ ${item.fileName || 'Factura'} Incongruencias encontradas en factura ${facturaRef}`,
                       text: [
                         'ALERTA DE COMPARACIÓN: FACTURA CON INCONGRUENCIAS',
                         '',
@@ -1445,7 +1445,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       formatCongruentAlbaranLineHtml,
                       'No disponible'
                     );
-                    const subjectOk = `${item.fileName || 'Factura'} Sin incongruencias en factura ${facturaRef}`;
+                    const subjectOk = `✅ ${item.fileName || 'Factura'} Sin incongruencias en factura ${facturaRef}`;
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
                       subject: subjectOk,
@@ -2457,28 +2457,6 @@ logoutBtn.addEventListener('click', async () => {
   }
 });
 
-async function clearSavedSessionsFromUI() {
-  const confirmed = confirm('Esto borrará todas las sesiones guardadas (principal y facturas). ¿Continuar?');
-  if (!confirmed) return;
-
-  try {
-    await ipcRenderer.invoke('clear-saved-sessions');
-    setBillingEmailLabel(null);
-    showStatus('Sesiones guardadas eliminadas. Inicia sesión de nuevo.', 'success');
-    await checkSession();
-  } catch (error) {
-    uiLog('error', 'clearSavedSessionsFromUI:error', serializeUiError(error));
-    showStatus('No se pudieron limpiar las sesiones guardadas.', 'error', error?.message || String(error || ''));
-  }
-}
-
-if (clearSessionsBtn) {
-  clearSessionsBtn.addEventListener('click', clearSavedSessionsFromUI);
-}
-
-if (clearSessionsBtnSidebar) {
-  clearSessionsBtnSidebar.addEventListener('click', clearSavedSessionsFromUI);
-}
 // (showUploadSection está implementada arriba con navegación mejorada)
 
 

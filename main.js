@@ -2144,20 +2144,6 @@ ipcMain.handle('scan-no-procesado', async () => {
   return { success: true };
 });
 
-ipcMain.handle('clear-saved-sessions', async () => {
-  setStoredAuth({ sessionId: null, refreshToken: null }, 'primary');
-  setStoredAuth({ sessionId: null, refreshToken: null }, 'billing');
-  store.delete('billingEmail');
-  store.delete('billingMode');
-  stopBillingMonitor();
-
-  startupScanState.inProgress = false;
-  startupScanState.completed = false;
-  startupScanState.waitingForSession = false;
-
-  return { success: true };
-});
-
 ipcMain.handle('ensure-standard-folders', async () => {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
