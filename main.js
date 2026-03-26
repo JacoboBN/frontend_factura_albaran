@@ -957,7 +957,7 @@ function getStoredAuth(purpose = 'primary') {
   const keys = getAuthStoreKeys(purpose);
   return {
     sessionId: store.get(keys.sessionIdKey) || null,
-    refreshToken: USE_REFRESH_TOKENS ? (store.get(keys.refreshTokenKey) || null) : null
+    refreshToken: store.get(keys.refreshTokenKey) || null
   };
 }
 
@@ -970,13 +970,17 @@ function setStoredAuth({ sessionId, refreshToken } = {}, purpose = 'primary') {
     store.set(keys.sessionIdKey, sessionId);
   }
 
-  if (!USE_REFRESH_TOKENS) {
-    store.delete(keys.refreshTokenKey);
-  } else if (refreshToken === null) {
+  if (refreshToken === null) {
     store.delete(keys.refreshTokenKey);
   } else if (refreshToken !== undefined) {
     store.set(keys.refreshTokenKey, refreshToken);
   }
+
+  log.info('[AuthStore] setStoredAuth', {
+    purpose,
+    hasSessionId: Boolean(store.get(keys.sessionIdKey)),
+    hasRefreshToken: Boolean(store.get(keys.refreshTokenKey))
+  });
 }
 
 async function refreshSessionTokens(purpose = 'primary') {
@@ -985,9 +989,15 @@ async function refreshSessionTokens(purpose = 'primary') {
     return null;
   }
 
+  log.info('[AuthStore] refreshSessionTokens:request', {
+    purpose,
+    hasSessionId: Boolean(sessionId),
+    hasRefreshToken: Boolean(refreshToken)
+  });
+
   const response = await axios.post(`${BACKEND_URL}/auth/verify`, {
     sessionId,
-    refreshToken: USE_REFRESH_TOKENS ? refreshToken : null
+    refreshToken: refreshToken || null
   }, {
     timeout: DEFAULT_TIMEOUT_MS
   });
@@ -999,6 +1009,12 @@ async function refreshSessionTokens(purpose = 'primary') {
       sessionId: nextSessionId,
       refreshToken: nextRefreshToken
     }, purpose);
+
+    log.info('[AuthStore] refreshSessionTokens:response', {
+      purpose,
+      hasNextSessionId: Boolean(nextSessionId),
+      hasNextRefreshToken: Boolean(nextRefreshToken)
+    });
   }
 
   return response?.data || null;
@@ -1585,7 +1601,7 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
       const mode = store.get('billingMode');
       if (mode === 'same') {
         store.set('billingSessionId', verifiedSessionId);
-        if (USE_REFRESH_TOKENS) {
+        if (verifiedRefreshToken) {
           store.set('billingRefreshToken', verifiedRefreshToken);
         } else {
           store.delete('billingRefreshToken');
@@ -2067,14 +2083,14 @@ ipcMain.handle('get-billing-config', async () => {
 
 ipcMain.handle('set-billing-email-same', async () => {
   const primarySessionId = store.get('sessionId');
-  const primaryRefreshToken = USE_REFRESH_TOKENS ? (store.get('refreshToken') || null) : null;
+  const primaryRefreshToken = store.get('refreshToken') || null;
   if (!primarySessionId) {
     throw new Error('No hay sesión principal activa');
   }
 
   const verifyResp = await postWithRetry(`${BACKEND_URL}/auth/verify`, {
     sessionId: primarySessionId,
-    refreshToken: USE_REFRESH_TOKENS ? primaryRefreshToken : null
+    refreshToken: primaryRefreshToken
   }, { retries: 1, allowAuthRefresh: false });
   const email = verifyResp?.data?.email || null;
   setStoredAuth({
@@ -2084,7 +2100,7 @@ ipcMain.handle('set-billing-email-same', async () => {
 
   store.set('billingMode', 'same');
   store.set('billingSessionId', verifyResp?.data?.sessionId || primarySessionId);
-  if (USE_REFRESH_TOKENS) {
+  if (verifyResp?.data?.refreshToken || primaryRefreshToken) {
     store.set('billingRefreshToken', verifyResp?.data?.refreshToken || primaryRefreshToken);
   } else {
     store.delete('billingRefreshToken');
@@ -3197,7 +3213,7 @@ async function scanNoProcesado(trigger = 'startup') {
 // Cerrar sesión
 ipcMain.handle('logout', async () => {
   const sessionId = store.get('sessionId');
-  const refreshToken = USE_REFRESH_TOKENS ? (store.get('refreshToken') || null) : null;
+  const refreshToken = store.get('refreshToken') || null;
 
   try {
     await postWithRetry(`${BACKEND_URL}/auth/logout`, {
