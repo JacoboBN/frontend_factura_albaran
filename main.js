@@ -33,6 +33,7 @@ const useRefreshTokensFromEnv = readBooleanEnv('ENABLE_REFRESH_TOKENS');
 const USE_REFRESH_TOKENS = useRefreshTokensFromEnv !== null
   ? useRefreshTokensFromEnv
   : process.env.NODE_ENV === 'production';
+const RESET_SESSION_ON_START = readBooleanEnv('RESET_SESSION_ON_START') === true;
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
@@ -1456,7 +1457,7 @@ const startupScanState = {
 };
 
 function resetSessionOnAppStart() {
-  if (!USE_REFRESH_TOKENS) {
+  if (RESET_SESSION_ON_START) {
     store.delete('sessionId');
     store.delete('billingSessionId');
     store.delete('refreshToken');
@@ -1509,7 +1510,7 @@ function openBdWindow() {
 
 app.whenReady().then(() => {
   mainLog('info', 'app.whenReady:start');
-  // La sesión no persiste entre reinicios de app: al abrir, siempre se vuelve a iniciar sesión.
+  // La sesión persiste entre reinicios salvo que RESET_SESSION_ON_START=true.
   resetSessionOnAppStart();
   createWindow();
 
@@ -2050,17 +2051,37 @@ function promptForFolderName(defaultName) {
 
 // Obtener información de la sesión
 ipcMain.handle('get-user-info', async () => {
-  const sessionId = store.get('sessionId');
-  if (!sessionId) return null;
-  
-  try {
-    const response = await postWithRetry(`${BACKEND_URL}/session/info`, {
-      sessionId
+  const auth = getStoredAuth('primary');
+  if (!auth?.sessionId) return null;
+
+  const requestSessionInfo = async (sessionId) => {
+    const response = await postWithRetry(`${BACKEND_URL}/session/info`, { sessionId }, {
+      retries: 1,
+      allowAuthRefresh: false
     });
-    
-    return response.data;
+    return response?.data || null;
+  };
+
+  try {
+    return await requestSessionInfo(auth.sessionId);
   } catch (error) {
+    const status = Number(error?.response?.status || 0);
+    if (status === 401 && auth.refreshToken) {
+      try {
+        await refreshSessionTokens('primary');
+        const refreshedSessionId = store.get('sessionId');
+        if (refreshedSessionId) {
+          return await requestSessionInfo(refreshedSessionId);
+        }
+      } catch (refreshError) {
+        mainLog('warn', 'get-user-info:refresh-failed', {
+          error: serializeError(refreshError)
+        });
+      }
+    }
+
     store.delete('sessionId');
+    store.delete('refreshToken');
     return null;
   }
 });
@@ -2118,6 +2139,20 @@ ipcMain.handle('start-billing-monitor', async () => {
 
 ipcMain.handle('scan-no-procesado', async () => {
   await scanNoProcesado('login');
+  return { success: true };
+});
+
+ipcMain.handle('clear-saved-sessions', async () => {
+  setStoredAuth({ sessionId: null, refreshToken: null }, 'primary');
+  setStoredAuth({ sessionId: null, refreshToken: null }, 'billing');
+  store.delete('billingEmail');
+  store.delete('billingMode');
+  stopBillingMonitor();
+
+  startupScanState.inProgress = false;
+  startupScanState.completed = false;
+  startupScanState.waitingForSession = false;
+
   return { success: true };
 });
 

@@ -8,6 +8,8 @@ const uploadSection = document.getElementById('upload-section');
 const loginBtn = document.getElementById('login-btn');
 const fileUpload = document.getElementById('file-upload');
 const logoutBtn = document.getElementById('logout-btn');
+const clearSessionsBtn = document.getElementById('clear-sessions-btn');
+const clearSessionsBtnSidebar = document.getElementById('clear-sessions-btn-sidebar');
 const menuButtons = document.querySelectorAll('.menu-item');
 const tileButtons = document.querySelectorAll('.tile');
 
@@ -2454,6 +2456,29 @@ logoutBtn.addEventListener('click', async () => {
     await ipcRenderer.invoke('logout');
   }
 });
+
+async function clearSavedSessionsFromUI() {
+  const confirmed = confirm('Esto borrará todas las sesiones guardadas (principal y facturas). ¿Continuar?');
+  if (!confirmed) return;
+
+  try {
+    await ipcRenderer.invoke('clear-saved-sessions');
+    setBillingEmailLabel(null);
+    showStatus('Sesiones guardadas eliminadas. Inicia sesión de nuevo.', 'success');
+    await checkSession();
+  } catch (error) {
+    uiLog('error', 'clearSavedSessionsFromUI:error', serializeUiError(error));
+    showStatus('No se pudieron limpiar las sesiones guardadas.', 'error', error?.message || String(error || ''));
+  }
+}
+
+if (clearSessionsBtn) {
+  clearSessionsBtn.addEventListener('click', clearSavedSessionsFromUI);
+}
+
+if (clearSessionsBtnSidebar) {
+  clearSessionsBtnSidebar.addEventListener('click', clearSavedSessionsFromUI);
+}
 // (showUploadSection está implementada arriba con navegación mejorada)
 
 
