@@ -640,7 +640,8 @@ function buildCongruentAlbaranesSummary(compareResult = {}) {
     return docs.map((doc) => {
       const num = doc?.albaranNum || 'N/A';
       const fileName = doc?.fileName || 'Nombre no disponible';
-      return `- Albarán ${num}: ${fileName}`;
+      const totalDetectedLabel = formatAmountEuro(doc?.totalDetected);
+      return `- Albarán ${num}: ${fileName} (total detectado: ${totalDetectedLabel})`;
     });
   }
 
@@ -661,7 +662,7 @@ function buildCongruentAlbaranesSummary(compareResult = {}) {
     return ['- No disponible'];
   }
 
-  return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible`);
+  return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible (total detectado: No disponible)`);
 }
 
 function aggregateArticles(lines, mode = 'factura') {
@@ -731,6 +732,40 @@ function formatAmountEuro(value) {
     return raw.includes('€') ? raw : `${raw}€`;
   }
   return `${numeric.toFixed(2)}€`;
+}
+
+function extractTotalDetectedFromTotalTxtText(totalText = '') {
+  const text = String(totalText || '').trim();
+  if (!text) return null;
+
+  // 1) Intentar JSON directo (objeto completo)
+  try {
+    const parsed = JSON.parse(text);
+    const direct = parseComparableNumber(parsed?.total);
+    if (direct !== null) return direct;
+  } catch (e) {
+    // continuar con otras estrategias
+  }
+
+  // 2) Intentar primera línea JSON válida
+  const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean);
+  if (firstLine) {
+    try {
+      const parsedLine = JSON.parse(firstLine);
+      const lineTotal = parseComparableNumber(parsedLine?.total);
+      if (lineTotal !== null) return lineTotal;
+    } catch (e) {
+      // continuar con regex
+    }
+  }
+
+  // 3) Fallback robusto: buscar patrón textual total: <valor>
+  const match = text.match(/"?total"?\s*[:=]\s*"?([-+]?\d[\d.,\s€]*)"?/i);
+  if (match && match[1]) {
+    return parseComparableNumber(match[1]);
+  }
+
+  return null;
 }
 
 function addEuroSymbolToAmounts(text = '') {
@@ -2947,12 +2982,18 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     }
 
     const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, informesNoComparadoFiles);
+    let totalDetected = null;
+    if (totalTxt) {
+      const totalText = await downloadDriveFileToString(totalTxt);
+      totalDetected = extractTotalDetectedFromTotalTxtText(totalText);
+    }
 
     albaranDocsByNum.set(albaranNum, {
       albaranNum,
       fileId: sourceFile?.id || null,
       fileName: sourceFile?.name || sourceFileName || null,
-      url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+      url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
+      totalDetected
     });
 
     if (mode === 'totales') {
@@ -2960,15 +3001,7 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
         hasMissingAlbaranTotals = true;
         overallIssues.push(`No se encontró Total${albaranNum}Alb.txt (ni variantes) para comparar por totales.`);
       } else {
-        const totalText = await downloadDriveFileToString(totalTxt);
-        let totalObj = null;
-        try {
-          totalObj = JSON.parse((totalText || '').split(/\r?\n/).find(line => line.trim()) || '{}');
-        } catch (e) {
-          totalObj = null;
-        }
-
-        const totalAlbaran = parseComparableNumber(totalObj?.total);
+        const totalAlbaran = totalDetected;
         if (totalAlbaran === null) {
           hasMissingAlbaranTotals = true;
           overallIssues.push(`Total inválido en ${totalTxt.name || `Total${albaranNum}Alb.txt`}.`);
@@ -2989,14 +3022,16 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
           albaranNum,
           fileId: sourceFile?.id || null,
           fileName: sourceFile?.name || sourceFileName || null,
-          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
+          totalDetected
         });
       } else {
         congruentAlbaranDocs.push({
           albaranNum,
           fileId: sourceFile?.id || null,
           fileName: sourceFile?.name || sourceFileName || null,
-          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null
+          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
+          totalDetected
         });
       }
     }
@@ -3391,9 +3426,9 @@ async function processBillingAttachmentAsFactura(attachment) {
       const albaranesTotalLabel = formatAmountEuro(albaranesTotalValue);
       const facturaDriveLink = buildDriveFileLink(uploadedId);
       const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
-        ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'}: ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
+        ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'} (total detectado: ${formatAmountEuro(doc?.totalDetected)}): ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
         : (Array.isArray(compareResult?.incongruentAlbaranes) && compareResult.incongruentAlbaranes.length
-          ? compareResult.incongruentAlbaranes.map((num) => `- Albarán ${num}: link no disponible`)
+          ? compareResult.incongruentAlbaranes.map((num) => `- Albarán ${num} (total detectado: No disponible): link no disponible`)
           : ['- No disponible']);
       const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
       const htmlIncongruentLinks = (Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length)
@@ -3416,7 +3451,7 @@ async function processBillingAttachmentAsFactura(attachment) {
       const htmlIssues = compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
 
       await sendEmailNotification(
-        `Incongruencias en factura ${facturaRef}`,
+        `Incongruencias en factura ⚠️ ${facturaRef}`,
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
@@ -3522,7 +3557,7 @@ async function processBillingAttachmentAsFactura(attachment) {
       const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
 
       await sendEmailNotification(
-        `Factura ${facturaRef} bien`,
+        `Factura ✅ ${facturaRef} bien`,
         [
           `Factura comparada: ${facturaRef}`,
           `Albaranes comparados: ${albaranesLabel}`,
