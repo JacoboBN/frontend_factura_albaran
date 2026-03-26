@@ -44,6 +44,8 @@ autoUpdater.autoDownload = true;
 const DEFAULT_BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
 const BACKEND_URL = process.env.BACKEND_URL || DEFAULT_BACKEND_URL;
 const DEFAULT_TIMEOUT_MS = 20000;
+const DRIVE_UPLOAD_TIMEOUT_MS = Number(process.env.DRIVE_UPLOAD_TIMEOUT_MS || 180000);
+const DRIVE_UPLOAD_CONCURRENCY = Math.max(1, Number(process.env.DRIVE_UPLOAD_CONCURRENCY || 3) || 3);
 const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 800;
@@ -1308,7 +1310,7 @@ async function uploadLocalFileToDrive(sessionId, filePath, targetFolderId) {
   formData.append('file', fs.createReadStream(filePath));
 
   const response = await postWithRetry(`${BACKEND_URL}/drive/upload`, formData, {
-    timeout: 60000,
+    timeout: DRIVE_UPLOAD_TIMEOUT_MS,
     retries: 2,
     axiosOptions: {
       headers: {
@@ -1781,28 +1783,42 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
 
     // Support single filePath string or array of paths
     const paths = Array.isArray(filePath) ? filePath : [filePath];
-    const results = [];
+    const results = new Array(paths.length);
+    let nextIndex = 0;
 
-    for (const p of paths) {
-      const formData = new FormData();
-      formData.append('sessionId', sessionId);
-      formData.append('targetFolderId', uploadFolderId);
-      formData.append('file', fs.createReadStream(p));
+    async function uploadWorker() {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= paths.length) break;
 
-      const response = await postWithRetry(`${BACKEND_URL}/drive/upload`, formData, {
-        timeout: 60000,
-        retries: 2,
-        axiosOptions: {
-          headers: {
-            ...formData.getHeaders()
-          },
-          maxContentLength: Infinity,
-          maxBodyLength: Infinity
-        }
-      });
+        const p = paths[current];
+        const formData = new FormData();
+        formData.append('sessionId', sessionId);
+        formData.append('targetFolderId', uploadFolderId);
+        formData.append('file', fs.createReadStream(p));
 
-      results.push(response.data);
+        const response = await postWithRetry(`${BACKEND_URL}/drive/upload`, formData, {
+          timeout: DRIVE_UPLOAD_TIMEOUT_MS,
+          retries: 2,
+          axiosOptions: {
+            headers: {
+              ...formData.getHeaders()
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+          }
+        });
+
+        results[current] = response.data;
+      }
     }
+
+    const workers = Array.from(
+      { length: Math.min(DRIVE_UPLOAD_CONCURRENCY, paths.length) },
+      () => uploadWorker()
+    );
+    await Promise.all(workers);
 
     return results.length === 1 ? results[0] : results;
   } catch (error) {
