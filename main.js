@@ -19,7 +19,21 @@ const REPORTS_SUBFOLDERS = {
   Facturas: 'Facturas-Informes'
 };
 const LAST_EMAIL_FILE_NAME = 'Ult_email.txt';
-const USE_REFRESH_TOKENS = process.env.NODE_ENV === 'production';
+
+function readBooleanEnv(name) {
+  const raw = process.env[name];
+  if (raw === undefined) return null;
+  const normalized = String(raw).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+const useRefreshTokensFromEnv = readBooleanEnv('ENABLE_REFRESH_TOKENS');
+const USE_REFRESH_TOKENS = useRefreshTokensFromEnv !== null
+  ? useRefreshTokensFromEnv
+  : process.env.NODE_ENV === 'production';
+const IS_DEV_RUNTIME = process.env.NODE_ENV !== 'production';
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
@@ -27,7 +41,10 @@ autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
 
 // URL del backend: usa BACKEND_URL si se define; si no, mantiene producción por defecto.
-const BACKEND_URL = process.env.BACKEND_URL || 'https://backend-factura-albaran.onrender.com';
+const DEFAULT_BACKEND_URL = IS_DEV_RUNTIME
+  ? 'http://localhost:3000'
+  : 'https://backend-factura-albaran.onrender.com';
+const BACKEND_URL = process.env.BACKEND_URL || DEFAULT_BACKEND_URL;
 const DEFAULT_TIMEOUT_MS = 20000;
 const OCR_RETRY_ATTEMPTS = 2;
 const OCR_RETRY_DELAY_MS = 2000;
@@ -1408,7 +1425,9 @@ async function performLocalOCR(filePath, mimeType, originalName) {
   });
 }
 
-const store = new Store();
+const store = new Store({
+  name: !USE_REFRESH_TOKENS ? `config-dev-${process.pid}` : 'config'
+});
 let mainWindow;
 let bdWindow;
 let billingMonitorInterval = null;
@@ -1425,6 +1444,8 @@ const startupScanState = {
 
 function resetSessionOnAppStart() {
   if (!USE_REFRESH_TOKENS) {
+    store.delete('sessionId');
+    store.delete('billingSessionId');
     store.delete('refreshToken');
     store.delete('billingRefreshToken');
   }
