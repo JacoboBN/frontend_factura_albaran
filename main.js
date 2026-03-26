@@ -32,7 +32,7 @@ function readBooleanEnv(name) {
 const useRefreshTokensFromEnv = readBooleanEnv('ENABLE_REFRESH_TOKENS');
 const USE_REFRESH_TOKENS = useRefreshTokensFromEnv !== null
   ? useRefreshTokensFromEnv
-  : process.env.NODE_ENV === 'production';
+  : (process.env.NODE_ENV === 'production' || app.isPackaged);
 const RESET_SESSION_ON_START = readBooleanEnv('RESET_SESSION_ON_START') === true;
 
 // Configurar logging para actualizaciones
@@ -1440,7 +1440,9 @@ async function performLocalOCR(filePath, mimeType, originalName) {
 }
 
 const store = new Store({
-  name: !USE_REFRESH_TOKENS ? `config-dev-${process.pid}` : 'config'
+  // Mantener siempre un almacenamiento estable para que la sesión sobreviva
+  // entre reinicios de la app.
+  name: 'config'
 });
 let mainWindow;
 let bdWindow;
