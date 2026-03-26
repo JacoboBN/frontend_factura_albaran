@@ -33,7 +33,6 @@ const useRefreshTokensFromEnv = readBooleanEnv('ENABLE_REFRESH_TOKENS');
 const USE_REFRESH_TOKENS = useRefreshTokensFromEnv !== null
   ? useRefreshTokensFromEnv
   : process.env.NODE_ENV === 'production';
-const IS_DEV_RUNTIME = process.env.NODE_ENV !== 'production';
 
 // Configurar logging para actualizaciones
 log.transports.file.level = 'info';
@@ -41,9 +40,7 @@ autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
 
 // URL del backend: usa BACKEND_URL si se define; si no, mantiene producción por defecto.
-const DEFAULT_BACKEND_URL = IS_DEV_RUNTIME
-  ? 'http://localhost:3000'
-  : 'https://backend-factura-albaran.onrender.com';
+const DEFAULT_BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
 const BACKEND_URL = process.env.BACKEND_URL || DEFAULT_BACKEND_URL;
 const DEFAULT_TIMEOUT_MS = 20000;
 const OCR_RETRY_ATTEMPTS = 2;
@@ -1601,6 +1598,10 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
     
   } catch (error) {
     console.error('Error en login:', error);
+    const isConnectionRefused = error?.code === 'ECONNREFUSED' || /ECONNREFUSED/i.test(String(error?.message || ''));
+    if (isConnectionRefused) {
+      throw new Error(`No se pudo conectar al backend (${BACKEND_URL}). Si quieres backend local, arráncalo y define BACKEND_URL=http://127.0.0.1:3000`);
+    }
     throw new Error('Error al iniciar sesión con Google');
   }
 });
