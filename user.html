@@ -156,6 +156,15 @@
       gap: 8px;
     }
 
+    .upload-order-panel {
+      background: #efefef;
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
     .compare-mode-title {
       font-size: 12px;
       font-weight: 700;
@@ -598,6 +607,12 @@
       color: #555;
     }
 
+    .upload-drop-zones {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
     .upload-drop-zone {
       border: 2px dashed #9ab7d8;
       border-radius: 14px;
@@ -613,6 +628,12 @@
       background: #f7fbff;
       cursor: pointer;
       transition: all 0.18s ease;
+    }
+
+    @media (max-width: 680px) {
+      .upload-drop-zones {
+        grid-template-columns: 1fr;
+      }
     }
 
     .upload-drop-zone.drag-over {
@@ -711,7 +732,10 @@
           <div class="upload-drop-title" id="upload-drop-title">Subir archivo</div>
           <button class="upload-drop-close" id="upload-drop-close" aria-label="Cerrar">×</button>
         </div>
-        <div class="upload-drop-zone" id="upload-drop-zone">SUBIR CARPETA COMPLETA</div>
+        <div class="upload-drop-zones">
+          <div class="upload-drop-zone" id="upload-drop-zone">SUBIR CARPETA COMPLETA</div>
+          <div class="upload-drop-zone" id="upload-drop-zone-files">SUBIR ARCHIVO/S</div>
+        </div>
         <div class="upload-drop-hint">Puedes arrastrar archivos o hacer click para seleccionarlos.</div>
       </div>
     </div>
@@ -781,6 +805,14 @@
             <div class="compare-mode-toggle" role="group" aria-label="Modo de comparación">
               <button class="compare-mode-btn active" id="compare-mode-totales" type="button">Comparar por totales</button>
               <button class="compare-mode-btn" id="compare-mode-complejo" type="button">Comparar complejo</button>
+            </div>
+          </div>
+
+          <div class="upload-order-panel">
+            <div class="compare-mode-title">Orden de carga</div>
+            <div class="compare-mode-toggle" role="group" aria-label="Orden de carga">
+              <button class="compare-mode-btn active" id="upload-order-facturas-first" type="button">Primero Facturas</button>
+              <button class="compare-mode-btn" id="upload-order-albaranes-first" type="button">Primero Albaranes</button>
             </div>
           </div>
 <!-- 

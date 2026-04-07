@@ -31,6 +31,7 @@ const billingLoginBtn = document.getElementById('billing-login-btn');
 const billingEmailLabel = document.getElementById('billing-email');
 const uploadDropModal = document.getElementById('upload-drop-modal');
 const uploadDropZone = document.getElementById('upload-drop-zone');
+const uploadDropZoneFiles = document.getElementById('upload-drop-zone-files');
 const uploadDropClose = document.getElementById('upload-drop-close');
 const uploadDropTitle = document.getElementById('upload-drop-title');
 const backendAlert = document.getElementById('backend-alert');
@@ -40,13 +41,31 @@ const backendAlertHelp = document.getElementById('backend-alert-help');
 const backendAlertClose = document.getElementById('backend-alert-close');
 const compareModeTotalesBtn = document.getElementById('compare-mode-totales');
 const compareModeComplejoBtn = document.getElementById('compare-mode-complejo');
+const uploadOrderFacturasFirstBtn = document.getElementById('upload-order-facturas-first');
+const uploadOrderAlbaranesFirstBtn = document.getElementById('upload-order-albaranes-first');
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const STARTUP_QUEUE_STEPS = ['Esperando', 'OCR', 'IA', 'Moviendo', 'Movido'];
-const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Comparando', 'Comparado', 'Email'];
+const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Esperando albaranes', 'Comparando', 'Comparado', 'Email'];
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
 let currentCompareMode = 'totales';
+let currentUploadOrder = 'facturas-first';
+const pendingFacturaComparisons = new Map();
+
+function setUploadOrder(mode = 'facturas-first') {
+  const normalized = String(mode || '').toLowerCase() === 'albaranes-first'
+    ? 'albaranes-first'
+    : 'facturas-first';
+  currentUploadOrder = normalized;
+
+  if (uploadOrderFacturasFirstBtn) {
+    uploadOrderFacturasFirstBtn.classList.toggle('active', normalized === 'facturas-first');
+  }
+  if (uploadOrderAlbaranesFirstBtn) {
+    uploadOrderAlbaranesFirstBtn.classList.toggle('active', normalized === 'albaranes-first');
+  }
+}
 
 function setCompareMode(mode = 'totales') {
   // SOLICITUD CLIENTE: forzar modo solo TOTALES.
@@ -75,6 +94,174 @@ if (compareModeComplejoBtn) {
 }
 
 setCompareMode('totales');
+
+if (uploadOrderFacturasFirstBtn) {
+  uploadOrderFacturasFirstBtn.addEventListener('click', () => setUploadOrder('facturas-first'));
+}
+
+if (uploadOrderAlbaranesFirstBtn) {
+  uploadOrderAlbaranesFirstBtn.addEventListener('click', () => setUploadOrder('albaranes-first'));
+}
+
+setUploadOrder('facturas-first');
+
+function areAllExpectedAlbaranesReady(compareResult = {}) {
+  const expected = Array.isArray(compareResult?.expectedAlbaranes) ? compareResult.expectedAlbaranes : [];
+  const matched = Array.isArray(compareResult?.matchedAlbaranes) ? compareResult.matchedAlbaranes : [];
+  if (!expected.length) return true;
+
+  const matchedSet = new Set(matched.map(num => String(num || '').trim()).filter(Boolean));
+  return expected
+    .map(num => String(num || '').trim())
+    .filter(Boolean)
+    .every(num => matchedSet.has(num));
+}
+
+function normalizeAlbaranId(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function extractExpectedAlbaranesFromFactura(analysisText = '') {
+  const sections = extractAnalysisSections(analysisText);
+  if (!sections?.isFactura) return [];
+
+  const expected = new Set();
+
+  const resumenLine = (sections.resumenRaw || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean);
+
+  if (resumenLine) {
+    try {
+      const parsed = JSON.parse(resumenLine);
+      const nums = Array.isArray(parsed?.num_albaran) ? parsed.num_albaran : [];
+      nums.forEach((num) => {
+        const clean = String(num || '').trim();
+        if (clean) expected.add(clean);
+      });
+    } catch (e) {
+      // fallback abajo
+    }
+  }
+
+  if (!expected.size) {
+    (sections.articulosRaw || '')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .forEach((line) => {
+        try {
+          const parsed = JSON.parse(line);
+          const clean = String(parsed?.num_albaran || '').trim();
+          if (clean) expected.add(clean);
+        } catch (e) {
+          // ignore
+        }
+      });
+  }
+
+  return Array.from(expected);
+}
+
+function hasTotalTxtForAlbaran(files = [], albaranNum = '') {
+  const expected = normalizeAlbaranId(albaranNum);
+  if (!expected) return false;
+
+  return (Array.isArray(files) ? files : []).some((file) => {
+    const name = String(file?.name || '').trim();
+    if (!/^total/i.test(name) || !/alb\.txt$/i.test(name)) return false;
+    const core = name.replace(/^total/i, '').replace(/alb\.txt$/i, '');
+    return normalizeAlbaranId(core) === expected;
+  });
+}
+
+async function comparePendingFacturasIfReady() {
+  const pendingEntries = Array.from(pendingFacturaComparisons.entries());
+  if (!pendingEntries.length) return;
+
+  for (const [queueId, pending] of pendingEntries) {
+    const item = pending?.item;
+    const analysisText = pending?.analysisText || '';
+    const parentFolderName = pending?.parentFolderName || 'Facturas';
+
+    if (!item || !analysisText) {
+      pendingFacturaComparisons.delete(queueId);
+      continue;
+    }
+
+    try {
+      const expectedAlbaranes = extractExpectedAlbaranesFromFactura(analysisText);
+      if (expectedAlbaranes.length) {
+        const informesNoComparado = await getOrCreateInformesNoComparadoFolder('Albaranes');
+        const listed = await ipcRenderer.invoke('list-contents', informesNoComparado.id);
+        const files = (listed?.files || []).filter(file => file.mimeType !== 'application/vnd.google-apps.folder');
+
+        const missing = expectedAlbaranes.filter(num => !hasTotalTxtForAlbaran(files, num));
+        if (missing.length) {
+          updateQueueStep(queueId, 'Esperando albaranes');
+          continue;
+        }
+      }
+
+      updateQueueStep(queueId, 'Comparando');
+      const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
+        facturaAnalysisText: analysisText,
+        rootFolderName: parentFolderName,
+        compareMode: 'totales'
+      });
+
+      if (!areAllExpectedAlbaranesReady(compareResult)) {
+        updateQueueStep(queueId, 'Esperando albaranes');
+        continue;
+      }
+
+      updateQueueStep(queueId, 'Comparado');
+      updateQueueStep(queueId, 'Email');
+
+      const recipientEmail = await getCurrentSessionEmail();
+      const facturaRef = getFacturaReferenceForEmail(analysisText, item?.fileName || 'XX');
+      const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+      const facturaTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.facturaTotal));
+      const albaranesTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes));
+
+      await ipcRenderer.invoke('send-email', {
+        to: recipientEmail,
+        subject: compareResult?.ok
+          ? `✅ ${item?.fileName || 'Factura'} validada (${facturaRef})`
+          : `⚠️ ${item?.fileName || 'Factura'} con incongruencias (${facturaRef})`,
+        text: [
+          `Factura: ${facturaRef}`,
+          `Albaranes comparados: ${albaranesLabel}`,
+          `Total factura: ${facturaTotalLabel}`,
+          `Total albaranes: ${albaranesTotalLabel}`,
+          compareResult?.message || 'Comparación completada.'
+        ].join('\n')
+      });
+
+      const shouldMoveFactura = compareResult?.ok
+        || (Array.isArray(compareResult?.matchedAlbaranes) && compareResult.matchedAlbaranes.length > 0);
+      if (shouldMoveFactura && item?.uploadedFileId && pending?.documentosFolderId) {
+        await ipcRenderer.invoke(
+          'move-file',
+          item.uploadedFileId,
+          [pending.documentosFolderId],
+          pending?.noComparadoFolderId ? [pending.noComparadoFolderId] : []
+        );
+      }
+
+      pendingFacturaComparisons.delete(queueId);
+      showStatus(`Factura ${item?.fileName || ''} comparada correctamente.`, 'success');
+    } catch (error) {
+      markQueueError(queueId, error?.message || 'Error al comparar factura pendiente');
+      showStatus(`Error al comparar factura pendiente: ${error?.message || error}`, 'error');
+    }
+  }
+}
 
 function enqueueUploadFlow(task, meta = {}) {
   const runTask = async () => {
@@ -1278,6 +1465,23 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
             if (docType === 'factura') {
               try {
+                if (currentUploadOrder === 'facturas-first') {
+                  pendingFacturaComparisons.set(item.queueId, {
+                    item: {
+                      queueId: item.queueId,
+                      fileName: item.fileName,
+                      uploadedFileId: item.uploadedFileId
+                    },
+                    analysisText,
+                    parentFolderName,
+                    documentosFolderId: documentosFolder?.id || null,
+                    noComparadoFolderId: noComparadoFolder?.id || target?.id || null
+                  });
+                  updateQueueStep(item.queueId, 'Esperando albaranes');
+                  showStatus(`Factura ${item.fileName} analizada y guardada. Esperando albaranes para comparar.`, 'loading');
+                  continue;
+                }
+
                 updateQueueStep(item.queueId, 'Comparando');
                 const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
                   facturaAnalysisText: analysisText,
@@ -1479,6 +1683,10 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
               ? `${parentFolderName}/No comparado`
               : targetLabel;
             showStatus(`¡${item.fileName} procesado y enviado a ${finalLabel}!`, 'success');
+
+            if (docType !== 'factura' && currentUploadOrder === 'facturas-first') {
+              await comparePendingFacturasIfReady();
+            }
           } catch (error) {
             uiLog('error', 'uploadFilesToFolder:item-error', {
               fileName: item.fileName,
@@ -2313,7 +2521,7 @@ if (uploadDropZone) {
     const target = currentUploadTargetFolder;
     if (!target) return;
     closeUploadDropModal();
-    await scheduleUploadFlow(target);
+    await scheduleUploadFlow(target, null, 'folder');
   });
 
   bindDropHandlers(uploadDropZone, async (droppedFilePaths) => {
@@ -2321,6 +2529,15 @@ if (uploadDropZone) {
     if (!target) return;
     closeUploadDropModal();
     await scheduleUploadFlow(target, droppedFilePaths);
+  });
+}
+
+if (uploadDropZoneFiles) {
+  uploadDropZoneFiles.addEventListener('click', async () => {
+    const target = currentUploadTargetFolder;
+    if (!target) return;
+    closeUploadDropModal();
+    await scheduleUploadFlow(target, null, 'file');
   });
 }
 

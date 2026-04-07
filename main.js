@@ -1838,10 +1838,9 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
 // Seleccionar archivo
 ipcMain.handle('select-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    // Permite seleccionar en un solo diálogo archivos sueltos y carpetas.
-    properties: ['openFile', 'openDirectory', 'multiSelections'],
+    properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: 'Todos los archivos', extensions: ['*'] }
+      { name: 'Archivos admitidos', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'tif', 'tiff', 'txt'] }
     ]
   });
 
