@@ -725,6 +725,12 @@ function parseComparableNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function amountToCents(value) {
+  const numeric = parseComparableNumber(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.round(numeric * 100);
+}
+
 function formatAmountEuro(value) {
   if (value === null || value === undefined || value === '') return 'No disponible';
   const numeric = typeof value === 'number' ? value : parseComparableNumber(value);
@@ -3126,8 +3132,17 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     }
 
     if (!hasMissingAlbaranTotals && facturaTotal !== null) {
-      const totalTolerance = 0.5;
-      if (!numbersClose(facturaTotal, sumatoriaTotalesAlbaranes, totalTolerance)) {
+      // SOLICITUD CLIENTE: comparación EXACTA (sin tolerancia).
+      // Se mantiene el enfoque anterior comentado para histórico.
+      // const totalTolerance = 0.5;
+      // if (!numbersClose(facturaTotal, sumatoriaTotalesAlbaranes, totalTolerance)) {
+      const facturaTotalCents = amountToCents(facturaTotal);
+      const sumatoriaTotalesAlbaranesCents = amountToCents(sumatoriaTotalesAlbaranes);
+      if (
+        facturaTotalCents === null
+        || sumatoriaTotalesAlbaranesCents === null
+        || facturaTotalCents !== sumatoriaTotalesAlbaranesCents
+      ) {
         overallIssues.push(
           `Diferencia de totales: factura=${facturaTotal}, suma_albaranes=${sumatoriaTotalesAlbaranes}`
         );
