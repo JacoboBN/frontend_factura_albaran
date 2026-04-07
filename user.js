@@ -250,6 +250,49 @@ function guessMimeTypeFromPath(filePath = '') {
   return mimeByExt[ext] || '';
 }
 
+function isAllowedUploadExtension(filePath = '') {
+  const ext = (path.extname(filePath || '') || '').toLowerCase();
+  return ['.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.txt'].includes(ext);
+}
+
+function expandPathsRecursively(inputPaths = []) {
+  const resolvedFiles = [];
+  const pending = Array.isArray(inputPaths) ? [...inputPaths] : [];
+
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current) continue;
+
+    let stat;
+    try {
+      stat = fs.statSync(current);
+    } catch {
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch {
+        entries = [];
+      }
+
+      entries.forEach((entry) => {
+        const childPath = path.join(current, entry.name);
+        pending.push(childPath);
+      });
+      continue;
+    }
+
+    if (stat.isFile() && isAllowedUploadExtension(current)) {
+      resolvedFiles.push(current);
+    }
+  }
+
+  return [...new Set(resolvedFiles)];
+}
+
 async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, docType, postProcess = null) {
   uiLog('log', 'invokeAnalyzeFileWithFallback:start', {
     filePath,
@@ -1465,12 +1508,17 @@ function queueUploadsAsWaiting(parentFolderName, filePaths = []) {
   });
 }
 
-async function scheduleUploadFlow(parentFolderName, selectedFilePaths = null) {
-  const filePaths = (Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0)
+async function scheduleUploadFlow(parentFolderName, selectedFilePaths = null, sourceMode = 'auto') {
+  const rawPaths = (Array.isArray(selectedFilePaths) && selectedFilePaths.length > 0)
     ? selectedFilePaths
-    : await ipcRenderer.invoke('select-file');
+    : (sourceMode === 'folder'
+      ? await ipcRenderer.invoke('select-folder')
+      : await ipcRenderer.invoke('select-file'));
+
+  const filePaths = expandPathsRecursively(rawPaths || []);
 
   if (!filePaths || !filePaths.length) {
+    showStatus('No se detectaron archivos válidos en la selección (carpeta o archivos).', 'error');
     return;
   }
 
@@ -2175,9 +2223,10 @@ function pathBasename(p) {
 
 function extractFilePathsFromDataTransfer(dataTransfer) {
   if (!dataTransfer || !dataTransfer.files) return [];
-  return Array.from(dataTransfer.files)
+  const rawPaths = Array.from(dataTransfer.files)
     .map(file => file?.path)
     .filter(Boolean);
+  return expandPathsRecursively(rawPaths);
 }
 
 function bindDropHandlers(element, onDrop) {

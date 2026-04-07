@@ -1838,7 +1838,8 @@ ipcMain.handle('upload-file', async (event, filePath, targetFolderId = null) => 
 // Seleccionar archivo
 ipcMain.handle('select-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile', 'multiSelections'],
+    // Permite seleccionar en un solo diálogo archivos sueltos y carpetas.
+    properties: ['openFile', 'openDirectory', 'multiSelections'],
     filters: [
       { name: 'Todos los archivos', extensions: ['*'] }
     ]
@@ -1846,6 +1847,18 @@ ipcMain.handle('select-file', async () => {
 
   if (!result.canceled && result.filePaths.length > 0) {
     return result.filePaths; // return array of paths
+  }
+  return null;
+});
+
+// Seleccionar carpeta (modo explícito)
+ipcMain.handle('select-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory']
+  });
+
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths;
   }
   return null;
 });
