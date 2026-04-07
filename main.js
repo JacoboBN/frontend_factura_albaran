@@ -843,12 +843,14 @@ function buildTxtFilesFromAnalysis(analysisText, sourceFileName = null) {
   const enrichedArticulos = appendSourceToJsonLines(articulosRaw, sourceFileName);
   const enrichedResumen = resumenLine ? appendSourceToJsonObject(resumenLine, sourceFileName) : resumenLine;
 
-  if (enrichedArticulos) {
-    files.push({
-      name: `${safeNum}${suffix}.txt`,
-      content: enrichedArticulos
-    });
-  }
+  // SOLICITUD CLIENTE: NO crear TXT no-total (artículos por línea).
+  // Se mantiene el bloque antiguo comentado para histórico.
+  // if (enrichedArticulos) {
+  //   files.push({
+  //     name: `${safeNum}${suffix}.txt`,
+  //     content: enrichedArticulos
+  //   });
+  // }
 
   if (enrichedResumen) {
     files.push({
@@ -2867,6 +2869,37 @@ async function moveGeneratedTxtToInformesDocumentos(analysisText, informesSource
   }
 }
 
+// COPIA (SOLICITUD CLIENTE): mover SOLO TXT de TOTALES a Documentos-Informes.
+// Se mantiene la función original para histórico.
+async function moveGeneratedTotalTxtToInformesDocumentos(analysisText, informesSourceFolderIds = [], informesDocumentosFolderId) {
+  if (!analysisText || !informesDocumentosFolderId) return;
+
+  const sourceFolderIds = (Array.isArray(informesSourceFolderIds) ? informesSourceFolderIds : [informesSourceFolderIds]).filter(Boolean);
+  if (!sourceFolderIds.length) return;
+
+  const payload = buildTxtFilesFromAnalysis(analysisText);
+  if (!payload?.files?.length) return;
+
+  const totalFiles = payload.files.filter((generated) => /^total/i.test(String(generated?.name || '').trim()));
+  if (!totalFiles.length) return;
+
+  const txtFilesByName = new Map();
+  for (const folderId of sourceFolderIds) {
+    const txtFiles = await findDriveFileInFolder(folderId, '');
+    for (const file of txtFiles) {
+      if (!file?.id || !file?.name) continue;
+      txtFilesByName.set((file.name || '').toLowerCase(), { ...file, sourceFolderId: folderId });
+    }
+  }
+
+  for (const generated of totalFiles) {
+    const match = txtFilesByName.get((generated?.name || '').toLowerCase());
+    if (match?.id) {
+      await moveDriveFileToFolder(match, informesDocumentosFolderId, match.sourceFolderId || null);
+    }
+  }
+}
+
 async function moveAlbaranAssetsToDocumentos({
   albaranNum,
   albaranLines,
@@ -2907,7 +2940,7 @@ async function downloadDriveFileToString(fileMeta) {
   return text;
 }
 
-async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName, compareMode = 'complejo' }) {
+async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName, compareMode = 'totales' }) {
   const parsed = parseFacturaAnalysis(facturaAnalysisText);
   const parsedFacturaTotal = parseComparableNumber(parsed?.resumen?.total);
   if (!parsed || !parsed.albaranNumbers.length) {
@@ -2959,7 +2992,10 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   const incongruentAlbaranes = [];
   const incongruentAlbaranDocs = [];
   const congruentAlbaranDocs = [];
-  const mode = String(compareMode || '').toLowerCase() === 'totales' ? 'totales' : 'complejo';
+  // MODO FORZADO A TOTALES (solicitud cliente):
+  // Se mantiene la línea original comentada para referencia.
+  // const mode = String(compareMode || '').toLowerCase() === 'totales' ? 'totales' : 'complejo';
+  const mode = 'totales';
   const facturaTotal = parseComparableNumber(parsed?.resumen?.total);
   let sumatoriaTotalesAlbaranes = 0;
   let hasMissingAlbaranTotals = false;
@@ -2975,21 +3011,25 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     let sourceFile = null;
     const albaranTxt = resolveAlbaranTxtFile(albaranNum, informesNoComparadoFiles);
 
-    if (!albaranTxt) {
-      overallIssues.push(`No se encontró .txt del albarán ${albaranNum} en No comparado.`);
-      incongruentAlbaranes.push(albaranNum);
-      continue;
-    }
+    // LÓGICA ANTIGUA (NO TOTALES) DESHABILITADA:
+    // No se exige .txt de líneas para poder comparar.
+    // if (!albaranTxt) {
+    //   overallIssues.push(`No se encontró .txt del albarán ${albaranNum} en No comparado.`);
+    //   incongruentAlbaranes.push(albaranNum);
+    //   continue;
+    // }
 
-    const albaranText = await downloadDriveFileToString(albaranTxt);
-    const albaranLines = parseJsonLines(albaranText);
+    const albaranLines = albaranTxt
+      ? parseJsonLines(await downloadDriveFileToString(albaranTxt))
+      : [];
     const facturaLinesForAlbaran = facturaByAlbaran.get(normalizeAlbaranNumberForMatch(albaranNum)) || [];
 
-    if (mode === 'complejo' && !facturaLinesForAlbaran.length) {
-      overallIssues.push(`No hay artículos de la factura para el albarán ${albaranNum}.`);
-      incongruentAlbaranes.push(albaranNum);
-      continue;
-    }
+    // LÓGICA ANTIGUA (NO TOTALES) DESHABILITADA:
+    // if (mode === 'complejo' && !facturaLinesForAlbaran.length) {
+    //   overallIssues.push(`No hay artículos de la factura para el albarán ${albaranNum}.`);
+    //   incongruentAlbaranes.push(albaranNum);
+    //   continue;
+    // }
 
     const sourceFileName = albaranLines.find(item => item?.source_file)?.source_file;
     if (sourceFileName) {
@@ -3027,30 +3067,31 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       }
     }
 
-    if (mode === 'complejo') {
-      const facturaMap = aggregateArticles(facturaLinesForAlbaran, 'factura');
-      const albaranMap = aggregateArticles(albaranLines, 'albaran');
-      const issues = compareArticleMaps(facturaMap, albaranMap);
-      if (issues.length) {
-        overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
-        incongruentAlbaranes.push(albaranNum);
-        incongruentAlbaranDocs.push({
-          albaranNum,
-          fileId: sourceFile?.id || null,
-          fileName: sourceFile?.name || sourceFileName || null,
-          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
-          totalDetected
-        });
-      } else {
-        congruentAlbaranDocs.push({
-          albaranNum,
-          fileId: sourceFile?.id || null,
-          fileName: sourceFile?.name || sourceFileName || null,
-          url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
-          totalDetected
-        });
-      }
-    }
+    // LÓGICA ANTIGUA (COMPARACIÓN COMPLEJA POR LÍNEAS) DESHABILITADA:
+    // if (mode === 'complejo') {
+    //   const facturaMap = aggregateArticles(facturaLinesForAlbaran, 'factura');
+    //   const albaranMap = aggregateArticles(albaranLines, 'albaran');
+    //   const issues = compareArticleMaps(facturaMap, albaranMap);
+    //   if (issues.length) {
+    //     overallIssues.push(`Albarán ${albaranNum}:`, ...issues.map(issue => ` - ${issue}`));
+    //     incongruentAlbaranes.push(albaranNum);
+    //     incongruentAlbaranDocs.push({
+    //       albaranNum,
+    //       fileId: sourceFile?.id || null,
+    //       fileName: sourceFile?.name || sourceFileName || null,
+    //       url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
+    //       totalDetected
+    //     });
+    //   } else {
+    //     congruentAlbaranDocs.push({
+    //       albaranNum,
+    //       fileId: sourceFile?.id || null,
+    //       fileName: sourceFile?.name || sourceFileName || null,
+    //       url: sourceFile?.id ? buildDriveFileLink(sourceFile.id) : null,
+    //       totalDetected
+    //     });
+    //   }
+    // }
 
     try {
       await moveAlbaranAssetsToDocumentos({
@@ -3064,9 +3105,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     }
 
     try {
-      if (albaranTxt?.id) {
-        await moveDriveFileToFolder(albaranTxt, albaranesInformesDocumentosFolder.id, albaranTxt.sourceFolderId || null);
-      }
+      // SOLICITUD CLIENTE: NO MOVER .TXT QUE NO SON TOTALES.
+      // Se deja comentado para conservar comportamiento anterior.
+      // if (albaranTxt?.id) {
+      //   await moveDriveFileToFolder(albaranTxt, albaranesInformesDocumentosFolder.id, albaranTxt.sourceFolderId || null);
+      // }
       if (totalTxt?.id) {
         await moveDriveFileToFolder(totalTxt, albaranesInformesDocumentosFolder.id, totalTxt.sourceFolderId || null);
       }
@@ -3107,7 +3150,14 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   }
 
   try {
-    await moveGeneratedTxtToInformesDocumentos(
+    // SOLICITUD CLIENTE: no mover .txt no-total.
+    // Se mantiene la llamada anterior comentada para histórico.
+    // await moveGeneratedTxtToInformesDocumentos(
+    //   facturaAnalysisText,
+    //   [facturasInformesNoProcesadoFolder?.id, facturasInformesNoComparadoFolder?.id],
+    //   facturasInformesDocumentosFolder?.id
+    // );
+    await moveGeneratedTotalTxtToInformesDocumentos(
       facturaAnalysisText,
       [facturasInformesNoProcesadoFolder?.id, facturasInformesNoComparadoFolder?.id],
       facturasInformesDocumentosFolder?.id
@@ -3151,7 +3201,7 @@ ipcMain.handle('compare-factura-albaranes', async (event, payload) => {
     throw new Error('Sesión requerida para comparar albaranes');
   }
 
-  const { facturaAnalysisText, rootFolderName, compareMode = 'complejo' } = payload || {};
+  const { facturaAnalysisText, rootFolderName, compareMode = 'totales' } = payload || {};
   if (!facturaAnalysisText || !rootFolderName) {
     throw new Error('Datos insuficientes para comparar albaranes');
   }
@@ -3413,7 +3463,9 @@ async function processBillingAttachmentAsFactura(attachment) {
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparando' });
     const compareResult = await compareFacturaWithAlbaranes({
       facturaAnalysisText: analysisResult?.analysis || '',
-      rootFolderName: 'Facturas'
+      rootFolderName: 'Facturas',
+      // SOLICITUD CLIENTE: forzar solo comparación por totales.
+      compareMode: 'totales'
     });
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'comparado' });
 
@@ -3433,9 +3485,10 @@ async function processBillingAttachmentAsFactura(attachment) {
         attachment?.filename || 'XX'
       );
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
-      const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
-      const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
-      const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
+      // SOLICITUD CLIENTE: eliminar bloques no-totales del email.
+      // const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
+      // const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
+      // const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
       const facturaTotalValue = parseComparableNumber(compareResult?.facturaTotal);
       const albaranesTotalValue = parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes);
       const facturaTotalLabel = formatAmountEuro(facturaTotalValue);
@@ -3461,10 +3514,10 @@ async function processBillingAttachmentAsFactura(attachment) {
             .join('')
         : incongruentAlbaranLinks.map(line => `<li>${escapeHtml(line)}</li>`).join('');
       const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
-      const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
-        .map(addEuroSymbolToAmounts);
+      // const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
+      //   .map(addEuroSymbolToAmounts);
       const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
-      const htmlIssues = compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
+      // const htmlIssues = compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
 
       await sendEmailNotification(
         `Incongruencias en factura ⚠️ ${facturaRef}`,
@@ -3473,18 +3526,13 @@ async function processBillingAttachmentAsFactura(attachment) {
           `Albaranes comparados: ${albaranesLabel}`,
           `Total factura: ${facturaTotalLabel}`,
           `Total albaranes: ${albaranesTotalLabel}`,
-          ...confidenceLines,
-          ...extractionWarningsLines,
           `Link factura original: ${facturaDriveLink || 'No disponible'}`,
           'Links albaranes con incongruencias:',
           ...incongruentAlbaranLinks,
           '',
           'Albaranes correctos (número y nombre guardado):',
           ...congruentAlbaranSummary,
-          compareMessage,
-          '',
-          'Detalles:',
-          ...compareIssues.map(issue => `- ${issue}`)
+          compareMessage
         ].join('\n'),
         `
           <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
@@ -3493,8 +3541,6 @@ async function processBillingAttachmentAsFactura(attachment) {
             <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
             <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
             <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-            <p><strong>Seguridad del modelo:</strong> ${escapeHtml(confidenceLines.join(' | '))}</p>
-            <p><strong>Warnings de extracción:</strong> ${escapeHtml(extractionWarningsLines.join(' | '))}</p>
             <p><strong>Factura original:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
 
             <h3 style="margin:14px 0 8px;">❌ <strong>Albaranes con incongruencias</strong></h3>
@@ -3502,63 +3548,10 @@ async function processBillingAttachmentAsFactura(attachment) {
 
             <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
             <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
-
-            <h3 style="margin:14px 0 8px;">🧩 <strong>Detalles</strong></h3>
-            <ul>${htmlIssues || '<li>Sin detalle adicional</li>'}</ul>
           </div>
         `
       );
-
-      if (criticalAlert.shouldSend) {
-        const failedAlbaranes = (Array.isArray(compareResult?.incongruentAlbaranes)
-          ? compareResult.incongruentAlbaranes
-          : [])
-          .map(num => String(num || '').trim())
-          .filter(Boolean);
-        const confidenceValue = criticalAlert.confidence;
-        const confidenceLabel = confidenceValue === null
-          ? 'No disponible'
-          : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
-
-        const emergencyEmptyUploadWarning = criticalAlert.emptyUploadPattern?.shouldWarnEmptyUpload
-          ? 'REVISAR SI SE HA SUBIDO EL ALBARÁN BIEN PORQUE SALE COMO VACÍO O CON MUCHOS ERRORES'
-          : null;
-
-        await sendEmailNotification(
-          `ERROR IMPORTANTE (${attachment?.filename || 'archivo'})`,
-          [
-            'Se han encontrado estas incongruencias en este archivo y necesita revisión humana.',
-            '',
-            `Nombre archivo: ${attachment?.filename || 'N/A'}`,
-            `Número de factura: ${facturaRef}`,
-            `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
-            `Total factura: ${facturaTotalLabel}`,
-            `Total albaranes: ${albaranesTotalLabel}`,
-            `Confianza IA: ${confidenceLabel}`,
-            `Albaranes con más de 6 incongruencias: ${criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno'}`,
-            ...(emergencyEmptyUploadWarning ? [emergencyEmptyUploadWarning] : []),
-            `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
-            'Links de albaranes fallados:',
-            ...incongruentAlbaranLinks,
-            '',
-            'Acción requerida: revisión humana.'
-          ].join('\n'),
-          `
-            <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
-              <h2 style="margin:0 0 12px;color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
-              <p>Este archivo requiere <strong>revisión humana</strong>.</p>
-              <p><strong>Nombre archivo:</strong> <strong>${escapeHtml(attachment?.filename || 'N/A')}</strong></p>
-              <p><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-              <p><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
-              <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
-              <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-              <p><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
-              <p><strong>Albaranes con más de 6 incongruencias:</strong> <strong>${escapeHtml(criticalAlert.severeAlbaranes.length ? criticalAlert.severeAlbaranes.join(', ') : 'Ninguno')}</strong></p>
-              <p><strong>Link de Drive (factura):</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
-            </div>
-          `
-        );
-      }
+      // SOLICITUD CLIENTE: no enviar email adicional por alertas IA/no-totales.
     } else if (compareResult?.ok) {
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'email' });
       const facturaRef = getFacturaReferenceForEmail(
@@ -3566,9 +3559,9 @@ async function processBillingAttachmentAsFactura(attachment) {
         attachment?.filename || 'XX'
       );
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
-      const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
-      const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
-      const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
+      // const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
+      // const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
+      // const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
       const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
       const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
 
@@ -3579,8 +3572,6 @@ async function processBillingAttachmentAsFactura(attachment) {
           `Albaranes comparados: ${albaranesLabel}`,
           `Total factura: ${facturaTotalLabel}`,
           `Total albaranes: ${albaranesTotalLabel}`,
-          ...confidenceLines,
-          ...extractionWarningsLines,
           'Se han comparado correctamente y todo bien.'
         ].join('\n'),
         `
@@ -3590,51 +3581,13 @@ async function processBillingAttachmentAsFactura(attachment) {
             <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
             <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
             <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-            <p><strong>Seguridad del modelo:</strong> ${escapeHtml(confidenceLines.join(' | '))}</p>
-            <p><strong>Warnings de extracción:</strong> ${escapeHtml(extractionWarningsLines.join(' | '))}</p>
             <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
             <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
             <p><em>Se han comparado correctamente y todo bien.</em></p>
           </div>
         `
       );
-
-      if (criticalAlert.lowConfidence) {
-        const facturaDriveLink = buildDriveFileLink(uploadedId);
-        const confidenceValue = criticalAlert.confidence;
-        const confidenceLabel = confidenceValue === null
-          ? 'No disponible'
-          : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
-
-        await sendEmailNotification(
-          `ERROR IMPORTANTE (${attachment?.filename || 'archivo'})`,
-          [
-            'Se ha detectado confianza baja de IA y este archivo necesita revisión humana.',
-            '',
-            `Nombre archivo: ${attachment?.filename || 'N/A'}`,
-            `Número de factura: ${facturaRef}`,
-            'Albaranes fallados: N/A',
-            `Total factura: ${facturaTotalLabel}`,
-            `Total albaranes: ${albaranesTotalLabel}`,
-            `Confianza IA: ${confidenceLabel}`,
-            `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
-            '',
-            'Acción requerida: revisión humana.'
-          ].join('\n'),
-          `
-            <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
-              <h2 style="margin:0 0 12px;color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
-              <p>Se detectó <strong>baja confianza de IA</strong>. Requiere revisión humana.</p>
-              <p><strong>Nombre archivo:</strong> <strong>${escapeHtml(attachment?.filename || 'N/A')}</strong></p>
-              <p><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-              <p><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
-              <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
-              <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-              <p><strong>Link de Drive (factura):</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
-            </div>
-          `
-        );
-      }
+      // SOLICITUD CLIENTE: no enviar email adicional por baja confianza IA.
     }
   } catch (error) {
     emitToRenderer('queue-event', {

@@ -49,7 +49,10 @@ let uploadFlowTail = Promise.resolve();
 let currentCompareMode = 'totales';
 
 function setCompareMode(mode = 'totales') {
-  const normalized = String(mode || '').toLowerCase() === 'complejo' ? 'complejo' : 'totales';
+  // SOLICITUD CLIENTE: forzar modo solo TOTALES.
+  // Se mantiene la lógica anterior comentada.
+  // const normalized = String(mode || '').toLowerCase() === 'complejo' ? 'complejo' : 'totales';
+  const normalized = 'totales';
   currentCompareMode = normalized;
 
   if (compareModeTotalesBtn) {
@@ -65,7 +68,10 @@ if (compareModeTotalesBtn) {
 }
 
 if (compareModeComplejoBtn) {
-  compareModeComplejoBtn.addEventListener('click', () => setCompareMode('complejo'));
+  // SOLICITUD CLIENTE: desactivar modo complejo (solo totales).
+  // compareModeComplejoBtn.addEventListener('click', () => setCompareMode('complejo'));
+  compareModeComplejoBtn.disabled = true;
+  compareModeComplejoBtn.title = 'Modo desactivado: solo comparación por totales';
 }
 
 setCompareMode('totales');
@@ -414,12 +420,14 @@ function buildTxtFilesFromAnalysis(analysisText, sourceFileName = null) {
   const enrichedArticulos = appendSourceToJsonLines(articulosRaw, sourceFileName);
   const enrichedResumen = resumenLine ? appendSourceToJsonObject(resumenLine, sourceFileName) : resumenLine;
 
-  if (enrichedArticulos) {
-    files.push({
-      name: `${safeNum}${suffix}.txt`,
-      content: enrichedArticulos
-    });
-  }
+  // SOLICITUD CLIENTE: NO crear TXT no-total (artículos por línea).
+  // Se mantiene el bloque antiguo comentado para histórico.
+  // if (enrichedArticulos) {
+  //   files.push({
+  //     name: `${safeNum}${suffix}.txt`,
+  //     content: enrichedArticulos
+  //   });
+  // }
 
   if (enrichedResumen) {
     files.push({
@@ -1231,7 +1239,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                 const compareResult = await ipcRenderer.invoke('compare-factura-albaranes', {
                   facturaAnalysisText: analysisText,
                   rootFolderName: parentFolderName,
-                  compareMode: currentCompareMode
+                  // SOLICITUD CLIENTE: forzar compare por totales.
+                  // compareMode: currentCompareMode
+                  compareMode: 'totales'
                 });
                 updateQueueStep(item.queueId, 'comparado');
 
@@ -1246,10 +1256,11 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
                 const facturaRef = getFacturaReferenceForEmail(analysisText, item.fileName || 'XX');
                 const albaranesLabel = getComparedAlbaranesLabel(compareResult);
-                const confidenceLines = buildModelConfidenceEmailLines(analysisText);
-                const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisText);
+                // SOLICITUD CLIENTE: email solo por totales (sin bloques de IA extra).
+                // const confidenceLines = buildModelConfidenceEmailLines(analysisText);
+                // const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisText);
                 const recipientEmail = await getCurrentSessionEmail();
-                const criticalAlert = buildCriticalAlertContext(compareResult, analysisText);
+                // const criticalAlert = buildCriticalAlertContext(compareResult, analysisText);
                 const facturaTotalValue = parseComparableNumber(compareResult?.facturaTotal ?? extractFacturaTotalFromAnalysis(analysisText));
                 const albaranesTotalValue = parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes);
                 const facturaTotalLabel = formatAmountEuro(facturaTotalValue);
@@ -1260,8 +1271,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                     const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
                     const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
                     const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-                    const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
-                      .map(addEuroSymbolToAmounts);
+                    // SOLICITUD CLIENTE: no incluir detalles no-totales en email.
+                    // const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
+                    //   .map(addEuroSymbolToAmounts);
                     const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
                     const htmlIncongruentLinks = toHtmlList(
                       incongruentAlbaranLinks,
@@ -1273,9 +1285,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                       formatCongruentAlbaranLineHtml,
                       'No disponible'
                     );
-                    const htmlIssues = compareIssues.length
-                      ? compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')
-                      : '<li>Sin detalle adicional</li>';
+                    // const htmlIssues = compareIssues.length
+                    //   ? compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')
+                    //   : '<li>Sin detalle adicional</li>';
 
                     await ipcRenderer.invoke('send-email', {
                       to: recipientEmail,
@@ -1288,12 +1300,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         `Albaranes comparados: ${albaranesLabel}`,
                         `Total factura: ${facturaTotalLabel}`,
                         `Total albaranes: ${albaranesTotalLabel}`,
-                        '',
-                        '=== RESUMEN DEL MODELO ===',
-                        ...confidenceLines,
-                        '',
-                        '=== WARNINGS DE EXTRACCIÓN ===',
-                        ...extractionWarningsLines,
                         '',
                         '=== FACTURA ORIGINAL ===',
                         `Link factura original: ${facturaDriveLink || 'No disponible'}`,
@@ -1308,9 +1314,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         '',
                         '=== RESUMEN DE COMPARACIÓN ===',
                         compareMessage,
-                        '',
-                        '=== DETALLES ===',
-                        ...compareIssues.map(issue => `- ${issue}`)
                       ].join('\n'),
                       html: `
                         <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
@@ -1322,16 +1325,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                             <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
                             <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
                             <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-                          </div>
-
-                          <div style="margin: 14px 0;">
-                            <h3 style="margin:0 0 8px; font-size:15px;">🔎 Resumen del modelo</h3>
-                            <p style="margin:0;"><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
-                          </div>
-
-                          <div style="margin: 14px 0;">
-                            <h3 style="margin:0 0 8px; font-size:15px;">🧾 Warnings de extracción</h3>
-                            <p style="margin:0;">${escapeHtml(extractionWarningsLines.join(' | '))}</p>
                           </div>
 
                           <div style="margin: 14px 0;">
@@ -1351,87 +1344,11 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                             <h3 style="margin:0 0 8px; font-size:15px;">📌 Resumen</h3>
                             <p style="margin:0;">${escapeHtml(compareMessage)}</p>
                           </div>
-
-                          <div style="margin: 14px 0;">
-                            <h3 style="margin:0 0 8px; font-size:15px;">🧩 Detalles</h3>
-                            <ul style="margin-top:0;">${htmlIssues}</ul>
-                          </div>
                         </div>
                       `
                     });
                     showStatus(`Email de incongruencias enviado para ${item.fileName}`, 'success');
-
-                    if (criticalAlert.shouldSend) {
-                      const failedAlbaranes = (Array.isArray(compareResult?.incongruentAlbaranes)
-                        ? compareResult.incongruentAlbaranes
-                        : [])
-                        .map(num => String(num || '').trim())
-                        .filter(Boolean);
-                      const confidenceValue = criticalAlert.confidence;
-                      const confidenceLabel = confidenceValue === null
-                        ? 'No disponible'
-                        : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
-                      const severeAlbaranesLabel = criticalAlert.severeAlbaranes.length
-                        ? criticalAlert.severeAlbaranes.join(', ')
-                        : 'Ninguno';
-                      const emergencyEmptyUploadWarning = criticalAlert.emptyUploadPattern?.shouldWarnEmptyUpload
-                        ? 'REVISAR SI SE HA SUBIDO EL ALBARÁN BIEN PORQUE SALE COMO VACÍO O CON MUCHOS ERRORES'
-                        : null;
-
-                      await ipcRenderer.invoke('send-email', {
-                        to: recipientEmail,
-                        subject: `ERROR IMPORTANTE (${item.fileName || 'archivo'})`,
-                        text: [
-                          'Se han encontrado incongruencias críticas en este archivo y necesita revisión humana.',
-                          '',
-                          '=== DATOS PRINCIPALES ===',
-                          `Nombre archivo: ${item.fileName || 'N/A'}`,
-                          `Número de factura: ${facturaRef}`,
-                          `Albaranes fallados: ${failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A'}`,
-                          `Total factura: ${facturaTotalLabel}`,
-                          `Total albaranes: ${albaranesTotalLabel}`,
-                          '',
-                          '=== ALERTAS ===',
-                          `Confianza IA: ${confidenceLabel}`,
-                          `Albaranes con más de 6 incongruencias: ${severeAlbaranesLabel}`,
-                          ...(emergencyEmptyUploadWarning ? [emergencyEmptyUploadWarning] : []),
-                          '',
-                          '=== ENLACES ===',
-                          `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
-                          'Links de albaranes fallados:',
-                          ...incongruentAlbaranLinks,
-                          '',
-                          'Acción requerida: revisión humana.'
-                        ].join('\n'),
-                        html: `
-                          <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
-                            <h2 style="margin:0 0 12px; color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
-                            <p>Se han detectado <strong>incongruencias críticas</strong> y este archivo requiere <strong>revisión humana</strong>.</p>
-
-                            <div style="background:#fff6f6; border:1px solid #f0d7d7; border-radius:8px; padding:12px; margin:12px 0;">
-                              <p style="margin:0 0 6px;"><strong>Nombre archivo:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
-                              <p style="margin:0 0 6px;"><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-                              <p style="margin:0 0 6px;"><strong>Albaranes fallados:</strong> <strong>${escapeHtml(failedAlbaranes.length ? failedAlbaranes.join(', ') : 'N/A')}</strong></p>
-                              <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
-                              <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-                            </div>
-
-                            <h3 style="margin:14px 0 8px; font-size:15px;">⚠️ Alertas</h3>
-                            <ul style="margin-top:0;">
-                              <li><strong>Confianza IA:</strong> ${escapeHtml(confidenceLabel)}</li>
-                              <li><strong>Albaranes con más de 6 incongruencias:</strong> ${escapeHtml(severeAlbaranesLabel)}</li>
-                              ${emergencyEmptyUploadWarning ? `<li><strong>${escapeHtml(emergencyEmptyUploadWarning)}</strong></li>` : ''}
-                            </ul>
-
-                            <h3 style="margin:14px 0 8px; font-size:15px;">🔗 Enlaces</h3>
-                            <p style="margin:0 0 8px;"><strong>Factura:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
-                            <ul style="margin-top:0;">${toHtmlList(incongruentAlbaranLinks, formatIncongruentAlbaranLineHtml, 'No disponible')}</ul>
-
-                            <p style="margin-top:12px;"><em>Acción requerida: revisión humana.</em></p>
-                          </div>
-                        `
-                      });
-                    }
+                    // SOLICITUD CLIENTE: no enviar email adicional basado en confianza IA / reglas no-totales.
                   } catch (emailError) {
                     console.error('Error enviando email de incongruencias:', emailError);
                     showStatus(`No se pudo enviar email de incongruencias: ${emailError.message || emailError}`, 'error');
@@ -1461,12 +1378,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         '=== ALBARANES CORRECTOS (número y nombre) ===',
                         'Albaranes correctos (número y nombre guardado):',
                         ...congruentAlbaranSummary,
-                        '',
-                        '=== RESUMEN DEL MODELO ===',
-                        ...confidenceLines,
-                        '',
-                        '=== WARNINGS DE EXTRACCIÓN ===',
-                        ...extractionWarningsLines,
                         'Se han comparado correctamente y todo bien.'
                       ].join('\n'),
                       html: `
@@ -1484,70 +1395,12 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                           <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
                           <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
 
-                          <div style="margin: 14px 0;">
-                            <h3 style="margin:0 0 8px; font-size:15px;">🔎 Resumen del modelo</h3>
-                            <p style="margin:0;"><strong>Seguridad del modelo:</strong><br>${escapeHtml(confidenceLines.join(' | '))}</p>
-                          </div>
-
-                          <div style="margin: 14px 0;">
-                            <h3 style="margin:0 0 8px; font-size:15px;">🧾 Warnings de extracción</h3>
-                            <p style="margin:0;">${escapeHtml(extractionWarningsLines.join(' | '))}</p>
-                          </div>
-
                           <p style="margin-top:12px;"><em>Se han comparado correctamente y todo bien.</em></p>
                         </div>
                       `
                     });
                     showStatus(`Email de validación enviado para ${item.fileName}`, 'success');
-
-                    if (criticalAlert.lowConfidence) {
-                      const facturaDriveLink = buildDriveFileLink(item.uploadedFileId);
-                      const confidenceValue = criticalAlert.confidence;
-                      const confidenceLabel = confidenceValue === null
-                        ? 'No disponible'
-                        : `${(Math.round(confidenceValue * 10000) / 100).toFixed(2)}%`;
-                      await ipcRenderer.invoke('send-email', {
-                        to: recipientEmail,
-                        subject: `ERROR IMPORTANTE (${item.fileName || 'archivo'})`,
-                        text: [
-                          'Se ha detectado una confianza baja de IA y se requiere revisión humana.',
-                          '',
-                          '=== DATOS PRINCIPALES ===',
-                          `Nombre archivo: ${item.fileName || 'N/A'}`,
-                          `Número de factura: ${facturaRef}`,
-                          'Albaranes fallados: N/A',
-                          `Total factura: ${facturaTotalLabel}`,
-                          `Total albaranes: ${albaranesTotalLabel}`,
-                          '',
-                          '=== ALERTAS ===',
-                          `Confianza IA: ${confidenceLabel}`,
-                          '',
-                          '=== ENLACES ===',
-                          `Link de Drive (factura): ${facturaDriveLink || 'No disponible'}`,
-                          '',
-                          'Acción requerida: revisión humana.'
-                        ].join('\n'),
-                        html: `
-                          <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
-                            <h2 style="margin:0 0 12px; color:#8a1c1c;">🚨 <strong>ERROR IMPORTANTE</strong></h2>
-                            <p>Se ha detectado <strong>baja confianza de IA</strong>. Este archivo requiere <strong>revisión humana</strong>.</p>
-
-                            <div style="background:#fff6f6; border:1px solid #f0d7d7; border-radius:8px; padding:12px; margin:12px 0;">
-                              <p style="margin:0 0 6px;"><strong>Nombre archivo:</strong> <strong>${escapeHtml(item.fileName || 'N/A')}</strong></p>
-                              <p style="margin:0 0 6px;"><strong>Número de factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-                              <p style="margin:0 0 6px;"><strong>Confianza IA:</strong> <strong>${escapeHtml(confidenceLabel)}</strong></p>
-                              <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
-                              <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-                            </div>
-
-                            <h3 style="margin:14px 0 8px; font-size:15px;">🔗 Enlace</h3>
-                            <p style="margin:0;"><strong>Factura:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
-
-                            <p style="margin-top:12px;"><em>Acción requerida: revisión humana.</em></p>
-                          </div>
-                        `
-                      });
-                    }
+                    // SOLICITUD CLIENTE: no enviar email adicional por baja confianza IA.
                   } catch (emailOkError) {
                     console.error('Error enviando email de validación:', emailOkError);
                     showStatus(`No se pudo enviar email de validación: ${emailOkError.message || emailOkError}`, 'error');
