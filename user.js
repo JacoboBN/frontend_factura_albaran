@@ -50,7 +50,6 @@ const uploadOrderAlbaranesFirstBtn = document.getElementById('upload-order-albar
 const appVersionEl = document.getElementById('app-version');
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
-const STARTUP_QUEUE_STEPS = ['Esperando', 'OCR', 'IA', 'Moviendo', 'Movido'];
 const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Esperando albaranes', 'Comparando', 'Comparado', 'Email'];
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
@@ -116,7 +115,8 @@ function normalizeQueueStep(step) {
     return 'Esperando';
   }
   if (rawStep === 'subiendo') return 'Subiendo';
-  if (rawStep === 'ocr') return 'OCR';
+  // Unificar pipeline en solo IA (sin etapa OCR visible/operativa).
+  if (rawStep === 'ocr') return 'IA';
   if (rawStep === 'ia') return 'IA';
   if (rawStep === 'esperando albaranes') return 'Esperando albaranes';
   if (rawStep === 'comparando') return 'Comparando';
@@ -313,20 +313,28 @@ function enqueueUploadFlow(task, meta = {}) {
   return next;
 }
 
-function resolveQueueSteps({ source = '', docType = '', steps = null } = {}) {
-  if (Array.isArray(steps) && steps.length > 0) {
-    return [...steps];
-  }
+function normalizeQueueStepsList(steps = []) {
+  const normalized = [];
 
-  const normalizedSource = String(source || '').toLowerCase();
+  (Array.isArray(steps) ? steps : []).forEach((step) => {
+    const normalizedStep = normalizeQueueStep(step);
+    if (!normalizedStep) return;
+
+    if (!normalized.length || normalized[normalized.length - 1] !== normalizedStep) {
+      normalized.push(normalizedStep);
+    }
+  });
+
+  return normalized;
+}
+
+function resolveQueueSteps({ source = '', docType = '', steps = null } = {}) {
+  // Importante: ignoramos pasos predefinidos por origen (startup/manual)
+  // para forzar un único pipeline por tipo de documento.
   const normalizedDocType = String(docType || '').toLowerCase();
 
-  if (normalizedDocType === 'factura' || normalizedSource === 'billing-email') {
+  if (normalizedDocType === 'factura') {
     return [...FACTURA_QUEUE_STEPS];
-  }
-
-  if (normalizedSource === 'startup') {
-    return [...STARTUP_QUEUE_STEPS];
   }
 
   return [...DEFAULT_QUEUE_STEPS];
