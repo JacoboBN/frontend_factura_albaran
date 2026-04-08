@@ -20,7 +20,9 @@
       {
         "provider": "github",
         "owner": "JacoboBN",
-        "repo": "frontend_factura_albaran"
+        "repo": "frontend_factura_albaran",
+        "releaseType": "release"
+
       }
     ],
     "win": {
