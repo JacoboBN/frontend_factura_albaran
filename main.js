@@ -2389,10 +2389,17 @@ async function waitForWindowReady() {
 
 async function processNoProcesadoFileWithEvents(fileMeta, queueId, options = {}) {
   const fileName = fileMeta.name || 'Archivo';
+  const docType = normalizeDocumentType(fileMeta?.sourceRoot);
   const shouldEmitInit = options.emitQueueInit !== false;
 
   if (shouldEmitInit) {
-    emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
+    emitToRenderer('queue-event', {
+      type: 'init',
+      id: queueId,
+      fileName,
+      source: 'startup',
+      docType
+    });
   }
 
   let localPath = options.localPath || null;
@@ -2413,7 +2420,6 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId, options = {})
     let analysisResult = options.analysisResult || null;
     if (!analysisResult) {
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-      const docType = normalizeDocumentType(fileMeta?.sourceRoot);
       analysisResult = await analyzeFileWithBackendIA(localPath, mimeType, fileName, docType, {
         txtFolderId: options?.pipeline?.txtFolderId || null,
         sourceDriveFileId: fileMeta?.id || null,
@@ -2421,6 +2427,13 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId, options = {})
         sourceDriveToFolderId: options?.pipeline?.sourceToFolderId || null,
         sourceFileName: fileName
       });
+    }
+
+    if (docType === 'factura') {
+      // Las facturas en startup quedan en espera hasta que estén sus albaranes,
+      // exactamente como en flujo de subida cuando se procesa factura primero.
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Esperando albaranes' });
+      return;
     }
 
     emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Enviando' });
@@ -3273,6 +3286,64 @@ async function listDriveFilesInFolder(rootFolderName, childFolderName) {
     }));
 }
 
+function buildFacturaAnalysisTextFromResumen(resumenObj = {}) {
+  const resumenLine = JSON.stringify(resumenObj || {});
+  return [
+    '=== ARTÍCULOS POR ALBARÁN (JSON Lines) ===',
+    '',
+    '=== RESUMEN FACTURA (JSON) ===',
+    resumenLine
+  ].join('\n');
+}
+
+async function loadFacturaAnalysisTextFromInformesNoComparado(fileMeta, informesNoComparadoFolderId) {
+  const files = await findDriveFileInFolder(informesNoComparadoFolderId, '');
+  const totalFactFiles = files.filter((file) => /^total/i.test(String(file?.name || '').trim()) && /fact\.txt$/i.test(String(file?.name || '').trim()));
+  const targetFileName = String(fileMeta?.name || '').trim().toLowerCase();
+  const targetBaseName = String(path.basename(fileMeta?.name || '', path.extname(fileMeta?.name || '')) || '').toLowerCase();
+
+  let fallbackByFacturaNum = null;
+
+  for (const txtFile of totalFactFiles) {
+    try {
+      const text = await downloadDriveFileToString(txtFile);
+      const firstLine = String(text || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .find(Boolean);
+      if (!firstLine) continue;
+
+      const resumenObj = JSON.parse(firstLine);
+      const sourceFile = String(resumenObj?.source_file || '').trim().toLowerCase();
+      const facturaNum = String(resumenObj?.num_factura || '').trim().toLowerCase();
+
+      if (sourceFile && sourceFile === targetFileName) {
+        return buildFacturaAnalysisTextFromResumen(resumenObj);
+      }
+
+      if (!fallbackByFacturaNum && facturaNum && targetBaseName.includes(facturaNum)) {
+        fallbackByFacturaNum = buildFacturaAnalysisTextFromResumen(resumenObj);
+      }
+    } catch (e) {
+      // continuar con siguiente TXT
+    }
+  }
+
+  if (fallbackByFacturaNum) {
+    return fallbackByFacturaNum;
+  }
+
+  throw new Error(`No se encontró TXT de informe para factura ${fileMeta?.name || ''}`);
+}
+
+function getMissingExpectedAlbaranes(expectedAlbaranes = [], informesAlbaranesFiles = []) {
+  const expected = (Array.isArray(expectedAlbaranes) ? expectedAlbaranes : [])
+    .map(num => String(num || '').trim())
+    .filter(Boolean);
+
+  return expected.filter((num) => !resolveTotalAlbaranTxtFile(num, informesAlbaranesFiles));
+}
+
 async function forcePendingFacturasComparison(trigger = 'manual') {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
@@ -3302,6 +3373,7 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
   const facturasInformesNoComparadoId = standard?.informesFolders?.bySourceRoot?.Facturas?.noComparado?.id || null;
 
   let compared = 0;
+  let waiting = 0;
   let failed = 0;
 
   emitToRenderer('startup-status', {
@@ -3326,41 +3398,34 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
         message: `Comparando factura pendiente ${fileName} (${idx + 1}/${totalFacturas})`
       });
 
-      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
-      const downloaded = await downloadDriveFileToTemp(fileMeta, fileName);
-      let analysisResult;
-      try {
-        analysisResult = await analyzeFileWithBackendIA(
-          downloaded.localPath,
-          downloaded.mimeType || fileMeta?.mimeType || '',
-          fileName,
-          'factura',
-          {
-            txtFolderId: facturasInformesNoComparadoId,
-            sourceDriveFileId: fileMeta?.id || null,
-            sourceDriveFromFolderId: facturasNoComparadoId,
-            sourceDriveToFolderId: facturasNoComparadoId,
-            sourceFileName: fileName
-          }
-        );
-      } finally {
-        try {
-          if (downloaded?.localPath && fs.existsSync(downloaded.localPath)) {
-            fs.unlinkSync(downloaded.localPath);
-          }
-        } catch (_) {}
+      // SOLICITUD CLIENTE:
+      // - Si la factura ya está en No comparado, usar su TXT ya generado en Informes/No comparado.
+      // - No volver a pasar por IA.
+      const analysisText = await loadFacturaAnalysisTextFromInformesNoComparado(fileMeta, facturasInformesNoComparadoId);
+      const parsedFactura = parseFacturaAnalysis(analysisText);
+
+      // Primero factura -> después comprobar existencia de albaranes esperados.
+      const informesAlbaranesNoComparado = await getInformesNoComparadoFolder('Albaranes');
+      const informesAlbaranesFiles = await findDriveFileInFolder(informesAlbaranesNoComparado.id, '');
+      const expectedAlbaranes = Array.isArray(parsedFactura?.albaranNumbers) ? parsedFactura.albaranNumbers : [];
+      const missingAlbaranes = getMissingExpectedAlbaranes(expectedAlbaranes, informesAlbaranesFiles);
+
+      if (missingAlbaranes.length) {
+        emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Esperando albaranes' });
+        waiting += 1;
+        continue;
       }
 
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparando' });
       const compareResult = await compareFacturaWithAlbaranes({
-        facturaAnalysisText: analysisResult?.analysis || '',
+        facturaAnalysisText: analysisText,
         rootFolderName: 'Facturas',
         compareMode: 'totales'
       });
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparado' });
 
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Email' });
-      const facturaRef = getFacturaReferenceForEmail(analysisResult?.analysis || '', fileName || 'XX');
+      const facturaRef = getFacturaReferenceForEmail(analysisText, fileName || 'XX');
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const facturaTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.facturaTotal));
       const albaranesTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes));
@@ -3395,12 +3460,13 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
     }
   }
 
-  const message = `Comparación forzada completada: ${compared}/${totalFacturas} factura(s) procesada(s). Albaranes disponibles en No comparado: ${albaranesNoComparado.length}.`;
+  const message = `Comparación forzada completada: ${compared}/${totalFacturas} factura(s) comparada(s), ${waiting} en espera de albaranes y ${failed} con error. Albaranes disponibles en No comparado: ${albaranesNoComparado.length}.`;
   emitToRenderer('startup-status', { message });
 
   return {
     totalFacturas,
     compared,
+    waiting,
     failed,
     availableAlbaranes: albaranesNoComparado.length,
     message
