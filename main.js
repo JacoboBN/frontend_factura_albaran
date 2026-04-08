@@ -957,27 +957,8 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
       docType,
       error: serializeError(error)
     });
-    const status = error?.response?.status;
-    const canTryLegacyTextMode = status === 404;
-    if (!canTryLegacyTextMode) {
-      throw error;
-    }
-
-    // 2) Compatibilidad con backend antiguo (sin endpoint /file): OCR local + envío de texto.
-    const ocrResult = await performLocalOCR(filePath, mimeType, originalName);
-    const textEndpoint = getLegacyAnalyzeTextEndpoint(docType);
-    const textResponse = await postWithRetry(textEndpoint, {
-      text: ocrResult.text,
-      quality: ocrResult.quality,
-      sessionId
-    });
-
-    mainLog('info', 'analyzeFileWithBackendIA:legacy-endpoint-ok', {
-      endpoint: textEndpoint,
-      hasAnalysis: Boolean(textResponse?.data?.analysis)
-    });
-
-    return textResponse.data;
+    // SOLICITUD CLIENTE: no permitir fallback OCR. Solo pipeline IA.
+    throw error;
   }
 }
 
@@ -2219,6 +2200,11 @@ ipcMain.handle('scan-no-procesado', async () => {
   return { success: true };
 });
 
+ipcMain.handle('force-pending-comparison', async () => {
+  const result = await forcePendingFacturasComparison('manual');
+  return { success: true, ...result };
+});
+
 ipcMain.handle('ensure-standard-folders', async () => {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
@@ -2407,7 +2393,6 @@ async function processNoProcesadoFileWithEvents(fileMeta, queueId, options = {})
 
   if (shouldEmitInit) {
     emitToRenderer('queue-event', { type: 'init', id: queueId, fileName, source: 'startup' });
-    emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'OCR' });
   }
 
   let localPath = options.localPath || null;
@@ -3265,6 +3250,163 @@ async function listDriveFilesInNoProcesado(rootFolderName) {
   return files;
 }
 
+async function listDriveFilesInFolder(rootFolderName, childFolderName) {
+  const rootFolder = await getDriveFolderByName(null, rootFolderName);
+  if (!rootFolder) return [];
+
+  const targetFolder = await getDriveFolderByName(rootFolder.id, childFolderName);
+  if (!targetFolder) return [];
+
+  const contents = await postWithRetry(`${BACKEND_URL}/drive/list-contents`, {
+    sessionId: store.get('sessionId'),
+    folderId: targetFolder.id
+  });
+
+  return (contents.data?.files || [])
+    .filter(item => item.mimeType !== 'application/vnd.google-apps.folder')
+    .filter(item => isAllowedExtension(item.name || ''))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(item => ({
+      ...item,
+      sourceRoot: rootFolderName,
+      noProcesadoId: targetFolder.id
+    }));
+}
+
+async function forcePendingFacturasComparison(trigger = 'manual') {
+  const sessionId = store.get('sessionId');
+  if (!sessionId) {
+    return {
+      totalFacturas: 0,
+      compared: 0,
+      failed: 0,
+      message: 'No hay sesión activa para comparar pendientes.'
+    };
+  }
+
+  await ensureStandardFolders();
+
+  const facturasNoComparado = await listDriveFilesInFolder('Facturas', 'No comparado');
+  const albaranesNoComparado = await listDriveFilesInFolder('Albaranes', 'No comparado');
+  const totalFacturas = facturasNoComparado.length;
+
+  if (!totalFacturas) {
+    const message = 'No hay facturas pendientes en Facturas/No comparado.';
+    emitToRenderer('startup-status', { message });
+    return { totalFacturas: 0, compared: 0, failed: 0, message };
+  }
+
+  const standard = await ensureStandardFolders();
+  const facturasNoComparadoId = standard?.facturas?.children?.['No comparado']?.id || null;
+  const facturasDocumentosId = standard?.facturas?.children?.Documentos?.id || null;
+  const facturasInformesNoComparadoId = standard?.informesFolders?.bySourceRoot?.Facturas?.noComparado?.id || null;
+
+  let compared = 0;
+  let failed = 0;
+
+  emitToRenderer('startup-status', {
+    message: `Forzando comparación de ${totalFacturas} factura(s) pendiente(s)...`
+  });
+
+  for (let idx = 0; idx < facturasNoComparado.length; idx += 1) {
+    const fileMeta = facturasNoComparado[idx];
+    const queueId = `force-compare-${Date.now()}-${idx}-${Math.random().toString(16).slice(2)}`;
+    const fileName = fileMeta?.name || 'Factura';
+
+    emitToRenderer('queue-event', {
+      type: 'init',
+      id: queueId,
+      fileName,
+      source: trigger,
+      docType: 'factura'
+    });
+
+    try {
+      emitToRenderer('startup-status', {
+        message: `Comparando factura pendiente ${fileName} (${idx + 1}/${totalFacturas})`
+      });
+
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'IA' });
+      const downloaded = await downloadDriveFileToTemp(fileMeta, fileName);
+      let analysisResult;
+      try {
+        analysisResult = await analyzeFileWithBackendIA(
+          downloaded.localPath,
+          downloaded.mimeType || fileMeta?.mimeType || '',
+          fileName,
+          'factura',
+          {
+            txtFolderId: facturasInformesNoComparadoId,
+            sourceDriveFileId: fileMeta?.id || null,
+            sourceDriveFromFolderId: facturasNoComparadoId,
+            sourceDriveToFolderId: facturasNoComparadoId,
+            sourceFileName: fileName
+          }
+        );
+      } finally {
+        try {
+          if (downloaded?.localPath && fs.existsSync(downloaded.localPath)) {
+            fs.unlinkSync(downloaded.localPath);
+          }
+        } catch (_) {}
+      }
+
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparando' });
+      const compareResult = await compareFacturaWithAlbaranes({
+        facturaAnalysisText: analysisResult?.analysis || '',
+        rootFolderName: 'Facturas',
+        compareMode: 'totales'
+      });
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparado' });
+
+      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Email' });
+      const facturaRef = getFacturaReferenceForEmail(analysisResult?.analysis || '', fileName || 'XX');
+      const albaranesLabel = getComparedAlbaranesLabel(compareResult);
+      const facturaTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.facturaTotal));
+      const albaranesTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes));
+
+      await sendEmailNotification(
+        compareResult?.ok
+          ? `✅ ${fileName || 'Factura'} validada (${facturaRef})`
+          : `⚠️ ${fileName || 'Factura'} con incongruencias (${facturaRef})`,
+        [
+          `Factura: ${facturaRef}`,
+          `Albaranes comparados: ${albaranesLabel}`,
+          `Total factura: ${facturaTotalLabel}`,
+          `Total albaranes: ${albaranesTotalLabel}`,
+          compareResult?.message || 'Comparación completada.'
+        ].join('\n')
+      );
+
+      const shouldMoveFactura = compareResult?.ok
+        || (Array.isArray(compareResult?.matchedAlbaranes) && compareResult.matchedAlbaranes.length > 0);
+      if (shouldMoveFactura && fileMeta?.id && facturasDocumentosId && facturasNoComparadoId) {
+        await moveDriveFileWithBackoff(fileMeta.id, [facturasDocumentosId], [facturasNoComparadoId]);
+      }
+
+      compared += 1;
+    } catch (error) {
+      failed += 1;
+      emitToRenderer('queue-event', {
+        type: 'error',
+        id: queueId,
+        message: error?.message || 'Error comparando factura pendiente'
+      });
+    }
+  }
+
+  const message = `Comparación forzada completada: ${compared}/${totalFacturas} factura(s) procesada(s). Albaranes disponibles en No comparado: ${albaranesNoComparado.length}.`;
+  emitToRenderer('startup-status', { message });
+
+  return {
+    totalFacturas,
+    compared,
+    failed,
+    availableAlbaranes: albaranesNoComparado.length,
+    message
+  };
+}
+
 async function scanNoProcesado(trigger = 'startup') {
   mainLog('info', 'scanNoProcesado:start', {
     trigger,
@@ -3318,7 +3460,12 @@ async function scanNoProcesado(trigger = 'startup') {
     total: allFiles.length
   });
   if (allFiles.length === 0) {
-    emitToRenderer('startup-status', { message: 'No se encontraron archivos en No procesado.' });
+    emitToRenderer('startup-status', { message: 'No se encontraron archivos en No procesado. Revisando pendientes de comparación...' });
+    try {
+      await forcePendingFacturasComparison('startup-auto');
+    } catch (error) {
+      log.warn('No se pudo ejecutar comparación forzada sin archivos nuevos:', error);
+    }
     startupScanState.inProgress = false;
     startupScanState.completed = true;
     startupScanState.waitingForSession = false;
@@ -3356,6 +3503,12 @@ async function scanNoProcesado(trigger = 'startup') {
       });
       log.error('Error procesando archivo en scan inicial:', error);
     }
+  }
+
+  try {
+    await forcePendingFacturasComparison('startup-auto');
+  } catch (error) {
+    log.warn('No se pudo ejecutar comparación forzada tras scan inicial:', error);
   }
 
   emitToRenderer('startup-status', { message: 'Análisis inicial completado.' });

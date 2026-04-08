@@ -47,6 +47,7 @@ const compareModeTotalesBtn = document.getElementById('compare-mode-totales');
 const compareModeComplejoBtn = document.getElementById('compare-mode-complejo');
 const uploadOrderFacturasFirstBtn = document.getElementById('upload-order-facturas-first');
 const uploadOrderAlbaranesFirstBtn = document.getElementById('upload-order-albaranes-first');
+const forceCompareBtn = document.getElementById('force-compare-btn');
 const appVersionEl = document.getElementById('app-version');
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
@@ -536,11 +537,7 @@ async function invokeAnalyzeFileWithFallback(filePath, mimeType, originalName, d
     return result;
   } catch (error) {
     uiLog('warn', 'invokeAnalyzeFileWithFallback:error', { error: serializeUiError(error) });
-    const message = String(error?.message || '');
-    if (message.includes("No handler registered for 'analyze-file'")) {
-      uiLog('warn', 'invokeAnalyzeFileWithFallback:using-legacy-handler', { docType });
-      return ipcRenderer.invoke('analyze-document', filePath, mimeType, originalName, docType);
-    }
+    // SOLICITUD CLIENTE: prohibido fallback OCR. Solo IA.
     throw error;
   }
 }
@@ -2958,4 +2955,30 @@ if (queueSelectAllBtn) {
 
 if (queueCancelSelectedBtn) {
   queueCancelSelectedBtn.addEventListener('click', requestCancelSelectedQueueItems);
+}
+
+if (forceCompareBtn) {
+  forceCompareBtn.addEventListener('click', async () => {
+    try {
+      forceCompareBtn.disabled = true;
+      showStatus('Forzando comparación de facturas pendientes...', 'loading');
+
+      const result = await ipcRenderer.invoke('force-pending-comparison');
+      const compared = Number(result?.compared || 0);
+      const total = Number(result?.totalFacturas || 0);
+      const failed = Number(result?.failed || 0);
+
+      if (total === 0) {
+        showStatus('No hay facturas pendientes en No comparado para comparar.', 'success');
+      } else if (failed > 0) {
+        showStatus(`Comparación forzada completada con incidencias (${compared}/${total}, errores: ${failed}).`, 'error');
+      } else {
+        showStatus(`Comparación forzada completada correctamente (${compared}/${total}).`, 'success');
+      }
+    } catch (error) {
+      showStatus(`Error al forzar comparación: ${error?.message || error}`, 'error');
+    } finally {
+      forceCompareBtn.disabled = false;
+    }
+  });
 }
