@@ -26,7 +26,7 @@ jobs:
       - name: Validate tag matches package version
         shell: pwsh
         run: |
-          $pkg = (Get-Content Frontend/package.json | ConvertFrom-Json).version
+          $pkg = (Get-Content package.json | ConvertFrom-Json).version
           $tag = '${{ github.ref_name }}'.TrimStart('v')
           if ($pkg -ne $tag) {
             Write-Error "Tag v$tag no coincide con package.json version $pkg"
