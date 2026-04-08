@@ -40,6 +40,23 @@ log.transports.file.level = 'info';
 autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
 
+const UPDATE_RELEASES_URL = 'https://github.com/JacoboBN/frontend_factura_albaran/releases/latest';
+const updaterState = {
+  status: 'idle',
+  message: 'Comprobación de actualizaciones pendiente.',
+  progress: null,
+  currentVersion: app.getVersion(),
+  availableVersion: null,
+  downloadedVersion: null,
+  releaseUrl: UPDATE_RELEASES_URL,
+  updatedAt: new Date().toISOString()
+};
+
+function updateUpdaterState(patch = {}) {
+  Object.assign(updaterState, patch, { updatedAt: new Date().toISOString() });
+  emitToRenderer('updater-status', { ...updaterState });
+}
+
 // URL del backend: usa BACKEND_URL si se define; si no, mantiene producción por defecto.
 const DEFAULT_BACKEND_URL = 'https://backend-factura-albaran.onrender.com';
 const BACKEND_URL = process.env.BACKEND_URL || DEFAULT_BACKEND_URL;
@@ -1721,42 +1738,76 @@ app.whenReady().then(() => {
   resetSessionOnAppStart();
   createWindow();
 
+  updateUpdaterState({
+    status: 'checking',
+    message: 'Buscando actualizaciones...'
+  });
+
   // Verificar actualizaciones disponibles
-  autoUpdater.checkForUpdatesAndNotify();
+  autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+    log.error('checkForUpdatesAndNotify error', error);
+    updateUpdaterState({
+      status: 'error',
+      message: `No se pudo comprobar actualizaciones: ${error?.message || error}`
+    });
+  });
 
   // Event listeners para actualizaciones
   autoUpdater.on('checking-for-update', () => {
     log.info('Checking for update...');
+    updateUpdaterState({
+      status: 'checking',
+      message: 'Buscando actualizaciones...'
+    });
   });
 
   autoUpdater.on('update-available', (info) => {
     log.info('Update available', info);
+    updateUpdaterState({
+      status: 'available',
+      message: `Nueva versión disponible (${info?.version || 'desconocida'}). Descargando...`,
+      availableVersion: info?.version || null,
+      releaseUrl: info?.releaseNotes ? UPDATE_RELEASES_URL : updaterState.releaseUrl,
+      progress: 0
+    });
   });
 
   autoUpdater.on('update-not-available', (info) => {
     log.info('Update not available', info);
+    updateUpdaterState({
+      status: 'up-to-date',
+      message: 'Ya tienes la última versión disponible.',
+      availableVersion: info?.version || null,
+      progress: null
+    });
   });
 
   autoUpdater.on('error', (err) => {
     log.error('Updater error', err);
+    updateUpdaterState({
+      status: 'error',
+      message: `Error de actualización: ${err?.message || err}`,
+      progress: null
+    });
   });
 
   autoUpdater.on('download-progress', (p) => {
     log.info('Download progress', p);
+    updateUpdaterState({
+      status: 'downloading',
+      message: `Descargando actualización... ${Math.round(p?.percent || 0)}%`,
+      progress: Number.isFinite(Number(p?.percent)) ? Number(p.percent) : null
+    });
   });
 
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-downloaded', (info) => {
     log.info('Update downloaded; will install now');
-    dialog
-      .showMessageBox(mainWindow, {
-        type: 'info',
-        buttons: ['Reiniciar ahora', 'Luego'],
-        title: 'Actualización lista',
-        message: 'Se descargó una actualización. ¿Quieres reiniciar para instalarla?'
-      })
-      .then((r) => {
-        if (r.response === 0) autoUpdater.quitAndInstall();
-      });
+    updateUpdaterState({
+      status: 'downloaded',
+      message: `Actualización lista (${info?.version || updaterState.availableVersion || 'nueva versión'}). Reinicia para instalar.`,
+      downloadedVersion: info?.version || updaterState.availableVersion || null,
+      progress: 100
+    });
   });
 
   // El escaneo de "No procesado" se lanzará desde el renderer tras iniciar sesión.
@@ -2321,6 +2372,41 @@ ipcMain.handle('get-user-info', async () => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+ipcMain.handle('updater-get-status', () => {
+  return { ...updaterState };
+});
+
+ipcMain.handle('updater-check-now', async () => {
+  updateUpdaterState({
+    status: 'checking',
+    message: 'Buscando actualizaciones...'
+  });
+  try {
+    await autoUpdater.checkForUpdatesAndNotify();
+    return { ok: true };
+  } catch (error) {
+    updateUpdaterState({
+      status: 'error',
+      message: `No se pudo comprobar actualizaciones: ${error?.message || error}`
+    });
+    throw error;
+  }
+});
+
+ipcMain.handle('updater-install-now', async () => {
+  if (updaterState.status !== 'downloaded') {
+    throw new Error('La actualización todavía no está lista para instalarse.');
+  }
+  setTimeout(() => {
+    try {
+      autoUpdater.quitAndInstall();
+    } catch (error) {
+      log.error('quitAndInstall error', error);
+    }
+  }, 300);
+  return { ok: true };
 });
 
 ipcMain.handle('get-billing-config', async () => {

@@ -3,7 +3,7 @@ name: Build & Release (Windows)
 on:
   push:
     tags:
-      - "v*.*.*"
+      - 'v*.*.*'
 
 permissions:
   contents: write
@@ -13,30 +13,30 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: Frontend/package-lock.json
 
       - name: Install dependencies
+        working-directory: Frontend
         run: npm ci
 
-      - name: Build Windows installer
-        run: npm run build:win -- --publish never
+      - name: Validate tag matches package version
+        shell: pwsh
+        run: |
+          $pkg = (Get-Content Frontend/package.json | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($pkg -ne $tag) {
+            Write-Error "Tag v$tag no coincide con package.json version $pkg"
+            exit 1
+          }
 
-      - name: ${{ github.ref_name }}
-        uses: softprops/action-gh-release@v2
+      - name: Build + Publish release artifacts
+        working-directory: Frontend
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          files: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/*.yml
-
-
-          generate_release_notes: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:win -- --publish always

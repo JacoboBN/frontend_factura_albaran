@@ -52,6 +52,18 @@ const uploadOrderFacturasFirstBtn = document.getElementById('upload-order-factur
 const uploadOrderAlbaranesFirstBtn = document.getElementById('upload-order-albaranes-first');
 const forceCompareBtn = document.getElementById('force-compare-btn');
 const appVersionEl = document.getElementById('app-version');
+const updaterMessageEl = document.getElementById('updater-message');
+const updaterProgressEl = document.getElementById('updater-progress');
+const updaterCheckBtn = document.getElementById('updater-check-btn');
+const updaterInstallBtn = document.getElementById('updater-install-btn');
+const updaterReleaseBtn = document.getElementById('updater-release-btn');
+
+let currentUpdaterStatus = {
+  status: 'idle',
+  message: 'Comprobación de actualizaciones pendiente.',
+  progress: null,
+  releaseUrl: 'https://github.com/JacoboBN/frontend_factura_albaran/releases/latest'
+};
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Esperando albaranes', 'Comparando', 'Comparado', 'Email'];
@@ -118,6 +130,77 @@ if (uploadOrderAlbaranesFirstBtn) {
 }
 
 setUploadOrder('facturas-first');
+
+function renderUpdaterStatus(payload = {}) {
+  currentUpdaterStatus = {
+    ...currentUpdaterStatus,
+    ...(payload || {})
+  };
+
+  if (updaterMessageEl) {
+    updaterMessageEl.textContent = currentUpdaterStatus.message || 'Estado de actualización no disponible.';
+  }
+
+  const progressValue = Number(currentUpdaterStatus.progress);
+  const shouldShowProgress = Number.isFinite(progressValue) && progressValue >= 0 && progressValue < 100;
+  if (updaterProgressEl) {
+    updaterProgressEl.classList.toggle('hidden', !shouldShowProgress);
+    if (shouldShowProgress) {
+      updaterProgressEl.value = Math.max(0, Math.min(100, progressValue));
+    }
+  }
+
+  if (updaterInstallBtn) {
+    updaterInstallBtn.disabled = currentUpdaterStatus.status !== 'downloaded';
+  }
+}
+
+async function refreshUpdaterStatus() {
+  try {
+    const status = await ipcRenderer.invoke('updater-get-status');
+    renderUpdaterStatus(status);
+  } catch (error) {
+    renderUpdaterStatus({
+      status: 'error',
+      message: `No se pudo obtener estado de actualización: ${error?.message || error}`,
+      progress: null
+    });
+  }
+}
+
+if (updaterCheckBtn) {
+  updaterCheckBtn.addEventListener('click', async () => {
+    try {
+      updaterCheckBtn.disabled = true;
+      renderUpdaterStatus({ status: 'checking', message: 'Buscando actualizaciones...', progress: null });
+      await ipcRenderer.invoke('updater-check-now');
+    } catch (error) {
+      showStatus(`Error al buscar actualizaciones: ${error?.message || error}`, 'error');
+    } finally {
+      updaterCheckBtn.disabled = false;
+    }
+  });
+}
+
+if (updaterInstallBtn) {
+  updaterInstallBtn.addEventListener('click', async () => {
+    try {
+      updaterInstallBtn.disabled = true;
+      showStatus('Reiniciando para instalar la actualización...', 'loading');
+      await ipcRenderer.invoke('updater-install-now');
+    } catch (error) {
+      showStatus(`No se pudo iniciar la instalación: ${error?.message || error}`, 'error');
+      updaterInstallBtn.disabled = false;
+    }
+  });
+}
+
+if (updaterReleaseBtn) {
+  updaterReleaseBtn.addEventListener('click', async () => {
+    const url = currentUpdaterStatus?.releaseUrl || 'https://github.com/JacoboBN/frontend_factura_albaran/releases/latest';
+    await ipcRenderer.invoke('open-external', url);
+  });
+}
 
 function normalizeQueueStep(step) {
   const rawStep = String(step || '').trim().toLowerCase();
@@ -2461,6 +2544,9 @@ async function showUploadSection(info) {
       appVersionEl.textContent = 'Versión --';
     }
   }
+
+  await refreshUpdaterStatus();
+
   const billingConfig = await ipcRenderer.invoke('get-billing-config');
   setBillingEmailLabel(billingConfig?.email || null);
 
@@ -2707,6 +2793,10 @@ ipcRenderer.on('startup-status', (event, payload) => {
   startupStatusEl.textContent = message;
   // Mantener el indicador pequeño dentro de la UI durante el escaneo
   toggleStartupOverlay(false);
+});
+
+ipcRenderer.on('updater-status', (event, payload) => {
+  renderUpdaterStatus(payload || {});
 });
 
 ipcRenderer.on('queue-event', (event, payload) => {
