@@ -3375,6 +3375,9 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
   let compared = 0;
   let waiting = 0;
   let failed = 0;
+  const comparedFileNames = [];
+  const waitingFileNames = [];
+  const failedFileNames = [];
 
   emitToRenderer('startup-status', {
     message: `Forzando comparación de ${totalFacturas} factura(s) pendiente(s)...`
@@ -3411,20 +3414,41 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
       const missingAlbaranes = getMissingExpectedAlbaranes(expectedAlbaranes, informesAlbaranesFiles);
 
       if (missingAlbaranes.length) {
-        emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Esperando albaranes' });
+        emitToRenderer('queue-event', {
+          type: 'step',
+          id: queueId,
+          step: 'Esperando albaranes',
+          fileName
+        });
         waiting += 1;
+        waitingFileNames.push(fileName);
         continue;
       }
 
-      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparando' });
+      emitToRenderer('queue-event', {
+        type: 'step',
+        id: queueId,
+        step: 'Comparando',
+        fileName
+      });
       const compareResult = await compareFacturaWithAlbaranes({
         facturaAnalysisText: analysisText,
         rootFolderName: 'Facturas',
         compareMode: 'totales'
       });
-      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Comparado' });
+      emitToRenderer('queue-event', {
+        type: 'step',
+        id: queueId,
+        step: 'Comparado',
+        fileName
+      });
 
-      emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'Email' });
+      emitToRenderer('queue-event', {
+        type: 'step',
+        id: queueId,
+        step: 'Email',
+        fileName
+      });
       const facturaRef = getFacturaReferenceForEmail(analysisText, fileName || 'XX');
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const facturaTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.facturaTotal));
@@ -3450,8 +3474,10 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
       }
 
       compared += 1;
+      comparedFileNames.push(fileName);
     } catch (error) {
       failed += 1;
+      failedFileNames.push(fileName);
       emitToRenderer('queue-event', {
         type: 'error',
         id: queueId,
@@ -3468,6 +3494,9 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
     compared,
     waiting,
     failed,
+    comparedFileNames,
+    waitingFileNames,
+    failedFileNames,
     availableAlbaranes: albaranesNoComparado.length,
     message
   };
@@ -3518,7 +3547,8 @@ async function scanNoProcesado(trigger = 'startup') {
   emitToRenderer('startup-status', { message: 'Revisando carpeta Facturas (2/2)' });
   const facturasFiles = await listDriveFilesInNoProcesado('Facturas');
 
-  const allFiles = [...albaranesFiles, ...facturasFiles];
+  // Flujo unificado solicitado: primero facturas, luego albaranes.
+  const allFiles = [...facturasFiles, ...albaranesFiles];
   mainLog('info', 'scanNoProcesado:files-found', {
     trigger,
     albaranes: albaranesFiles.length,

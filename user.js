@@ -59,9 +59,12 @@ let currentUploadOrder = 'facturas-first';
 const pendingFacturaComparisons = new Map();
 
 function setUploadOrder(mode = 'facturas-first') {
-  const normalized = String(mode || '').toLowerCase() === 'albaranes-first'
-    ? 'albaranes-first'
-    : 'facturas-first';
+  // Flujo unificado solicitado: siempre facturas primero.
+  // Se mantiene la lógica anterior comentada para histórico.
+  // const normalized = String(mode || '').toLowerCase() === 'albaranes-first'
+  //   ? 'albaranes-first'
+  //   : 'facturas-first';
+  const normalized = 'facturas-first';
   currentUploadOrder = normalized;
 
   if (uploadOrderFacturasFirstBtn) {
@@ -105,7 +108,10 @@ if (uploadOrderFacturasFirstBtn) {
 }
 
 if (uploadOrderAlbaranesFirstBtn) {
-  uploadOrderAlbaranesFirstBtn.addEventListener('click', () => setUploadOrder('albaranes-first'));
+  // Flujo unificado solicitado: desactivar opción albaranes primero.
+  // uploadOrderAlbaranesFirstBtn.addEventListener('click', () => setUploadOrder('albaranes-first'));
+  uploadOrderAlbaranesFirstBtn.disabled = true;
+  uploadOrderAlbaranesFirstBtn.title = 'Modo desactivado: flujo único (facturas primero)';
 }
 
 setUploadOrder('facturas-first');
@@ -2967,6 +2973,28 @@ if (forceCompareBtn) {
       const compared = Number(result?.compared || 0);
       const total = Number(result?.totalFacturas || 0);
       const failed = Number(result?.failed || 0);
+      const comparedFileNames = Array.isArray(result?.comparedFileNames)
+        ? result.comparedFileNames.map(name => String(name || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+
+      if (comparedFileNames.length) {
+        const comparedSet = new Set(comparedFileNames);
+        for (const [queueId, item] of uploadQueue.entries()) {
+          const itemName = String(item?.fileName || '').trim().toLowerCase();
+          if (!itemName) continue;
+          if (item?.status !== 'Esperando albaranes') continue;
+          if (!comparedSet.has(itemName)) continue;
+          updateQueueStep(queueId, 'Comparado');
+          updateQueueStep(queueId, 'Email');
+        }
+
+        for (const [queueId, pending] of pendingFacturaComparisons.entries()) {
+          const pendingName = String(pending?.item?.fileName || '').trim().toLowerCase();
+          if (!pendingName) continue;
+          if (!comparedSet.has(pendingName)) continue;
+          pendingFacturaComparisons.delete(queueId);
+        }
+      }
 
       if (total === 0) {
         showStatus('No hay facturas pendientes en No comparado para comparar.', 'success');
