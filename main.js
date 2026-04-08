@@ -667,6 +667,185 @@ function buildCongruentAlbaranesSummary(compareResult = {}) {
   return congruentNums.map((num) => `- Albarán ${num}: nombre no disponible (total detectado: No disponible)`);
 }
 
+function buildIncongruentAlbaranesLinks(compareResult = {}) {
+  const docs = Array.isArray(compareResult?.incongruentAlbaranDocs)
+    ? compareResult.incongruentAlbaranDocs
+    : [];
+  if (docs.length) {
+    return docs.map((doc) => {
+      const num = doc?.albaranNum || 'N/A';
+      const fileName = doc?.fileName || 'Nombre no disponible';
+      const totalDetectedLabel = formatAmountEuro(doc?.totalDetected);
+      const url = doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible';
+      return `- Albarán ${num} (${fileName}, total detectado: ${totalDetectedLabel}): ${url}`;
+    });
+  }
+
+  const nums = Array.isArray(compareResult?.incongruentAlbaranes)
+    ? compareResult.incongruentAlbaranes
+    : [];
+  if (!nums.length) {
+    return ['- No disponible'];
+  }
+
+  return nums.map((num) => `- Albarán ${num} (nombre no disponible, total detectado: No disponible): link no disponible`);
+}
+
+function formatIncongruentAlbaranLineHtml(line = '') {
+  const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?)\s+\((.+?)\):\s*(.+)$/i);
+  if (!match) return escapeHtml(cleaned);
+
+  const [, num, fileName, urlRaw] = match;
+  const safeNum = escapeHtml(num);
+  const safeName = escapeHtml(fileName);
+  const safeUrl = escapeHtml(urlRaw);
+  const hasLink = /^https?:\/\//i.test(String(urlRaw || '').trim());
+  const urlHtml = hasLink ? `<a href="${safeUrl}">Abrir en Drive</a>` : safeUrl;
+
+  return `Albarán <strong>${safeNum}</strong> (<strong>${safeName}</strong>): ${urlHtml}`;
+}
+
+function formatCongruentAlbaranLineHtml(line = '') {
+  const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*(.+)$/i);
+  if (!match) return escapeHtml(cleaned);
+
+  const [, num, fileName] = match;
+  return `Albarán <strong>${escapeHtml(num)}</strong>: <strong>${escapeHtml(fileName)}</strong>`;
+}
+
+function toHtmlList(lines = [], formatter = (line) => escapeHtml(line), emptyText = 'No disponible') {
+  if (!Array.isArray(lines) || !lines.length) {
+    return `<li>${escapeHtml(emptyText)}</li>`;
+  }
+
+  return lines
+    .map((line) => `<li>${formatter(line)}</li>`)
+    .join('');
+}
+
+function buildComparisonEmailPayload({
+  compareResult = {},
+  fileName = 'Factura',
+  facturaRef = 'XX',
+  albaranesLabel = 'N/A',
+  facturaTotalLabel = 'No disponible',
+  albaranesTotalLabel = 'No disponible',
+  facturaDriveLink = null
+} = {}) {
+  const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
+  const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
+  const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
+
+  const htmlIncongruentLinks = toHtmlList(
+    incongruentAlbaranLinks,
+    formatIncongruentAlbaranLineHtml,
+    'No disponible'
+  );
+  const htmlCongruentSummary = toHtmlList(
+    congruentAlbaranSummary,
+    formatCongruentAlbaranLineHtml,
+    'No disponible'
+  );
+
+  if (!compareResult?.ok) {
+    return {
+      subject: `⚠️ ${fileName || 'Factura'} Incongruencias encontradas en factura ${facturaRef}`,
+      text: [
+        'ALERTA DE COMPARACIÓN: FACTURA CON INCONGRUENCIAS',
+        '',
+        `Factura comparada: ${facturaRef}`,
+        `Nombre archivo factura: ${fileName || 'N/A'}`,
+        `Albaranes comparados: ${albaranesLabel}`,
+        `Total factura: ${facturaTotalLabel}`,
+        `Total albaranes: ${albaranesTotalLabel}`,
+        '',
+        '=== FACTURA ORIGINAL ===',
+        `Link factura original: ${facturaDriveLink || 'No disponible'}`,
+        '',
+        '=== ALBARANES CON INCONGRUENCIAS (número y nombre) ===',
+        'Links albaranes con incongruencias:',
+        ...incongruentAlbaranLinks,
+        '',
+        '=== ALBARANES CORRECTOS (número y nombre) ===',
+        'Albaranes correctos (número y nombre guardado):',
+        ...congruentAlbaranSummary,
+        '',
+        '=== RESUMEN DE COMPARACIÓN ===',
+        compareMessage,
+      ].join('\n'),
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+          <h2 style="margin: 0 0 12px; color: #8a1c1c;">⚠️ <strong>Incongruencias encontradas</strong></h2>
+
+          <div style="background:#f8f9fb; border:1px solid #e6e9ef; border-radius:8px; padding:12px; margin-bottom:12px;">
+            <p style="margin:0 0 6px;"><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+            <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(fileName || 'N/A')}</strong></p>
+            <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+            <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+            <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
+          </div>
+
+          <div style="margin: 14px 0;">
+            <h3 style="margin:0 0 8px; font-size:15px;">📄 Factura original</h3>
+            <p style="margin:0;">${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir factura en Drive</a>` : 'No disponible'}</p>
+          </div>
+
+          <hr style="border:none; border-top:1px solid #eceff3; margin:16px 0;" />
+
+          <h3 style="margin:0 0 8px; font-size:15px;">❌ Albaranes con incongruencias</h3>
+          <ul style="margin-top:0;">${htmlIncongruentLinks}</ul>
+
+          <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
+          <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
+
+          <div style="margin: 14px 0;">
+            <h3 style="margin:0 0 8px; font-size:15px;">📌 Resumen</h3>
+            <p style="margin:0;">${escapeHtml(compareMessage)}</p>
+          </div>
+        </div>
+      `
+    };
+  }
+
+  return {
+    subject: `✅ ${fileName || 'Factura'} Sin incongruencias en factura ${facturaRef}`,
+    text: [
+      'VALIDACIÓN COMPLETADA: FACTURA CORRECTA',
+      '',
+      `Factura comparada: ${facturaRef}`,
+      `Nombre archivo factura: ${fileName || 'N/A'}`,
+      `Albaranes comparados: ${albaranesLabel}`,
+      `Total factura: ${facturaTotalLabel}`,
+      `Total albaranes: ${albaranesTotalLabel}`,
+      '',
+      '=== ALBARANES CORRECTOS (número y nombre) ===',
+      'Albaranes correctos (número y nombre guardado):',
+      ...congruentAlbaranSummary,
+      'Se han comparado correctamente y todo bien.'
+    ].join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+        <h2 style="margin: 0 0 12px; color: #17693a;">✅ <strong>Factura validada correctamente</strong></h2>
+
+        <div style="background:#f6fbf8; border:1px solid #dcefe3; border-radius:8px; padding:12px; margin-bottom:12px;">
+          <p style="margin:0 0 6px;"><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+          <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(fileName || 'N/A')}</strong></p>
+          <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+          <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+          <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
+        </div>
+
+        <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
+        <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
+
+        <p style="margin-top:12px;"><em>Se han comparado correctamente y todo bien.</em></p>
+      </div>
+    `
+  };
+}
+
 function aggregateArticles(lines, mode = 'factura') {
   const map = new Map();
   lines.forEach(item => {
@@ -3454,18 +3633,16 @@ async function forcePendingFacturasComparison(trigger = 'manual') {
       const facturaTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.facturaTotal));
       const albaranesTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes));
 
-      await sendEmailNotification(
-        compareResult?.ok
-          ? `✅ ${fileName || 'Factura'} validada (${facturaRef})`
-          : `⚠️ ${fileName || 'Factura'} con incongruencias (${facturaRef})`,
-        [
-          `Factura: ${facturaRef}`,
-          `Albaranes comparados: ${albaranesLabel}`,
-          `Total factura: ${facturaTotalLabel}`,
-          `Total albaranes: ${albaranesTotalLabel}`,
-          compareResult?.message || 'Comparación completada.'
-        ].join('\n')
-      );
+      const emailPayload = buildComparisonEmailPayload({
+        compareResult,
+        fileName,
+        facturaRef,
+        albaranesLabel,
+        facturaTotalLabel,
+        albaranesTotalLabel,
+        facturaDriveLink: buildDriveFileLink(fileMeta?.id || null)
+      });
+      await sendEmailNotification(emailPayload.subject, emailPayload.text, emailPayload.html);
 
       const shouldMoveFactura = compareResult?.ok
         || (Array.isArray(compareResult?.matchedAlbaranes) && compareResult.matchedAlbaranes.length > 0);
@@ -3774,63 +3951,16 @@ async function processBillingAttachmentAsFactura(attachment) {
       const facturaTotalLabel = formatAmountEuro(facturaTotalValue);
       const albaranesTotalLabel = formatAmountEuro(albaranesTotalValue);
       const facturaDriveLink = buildDriveFileLink(uploadedId);
-      const incongruentAlbaranLinks = Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length
-        ? compareResult.incongruentAlbaranDocs.map((doc) => `- Albarán ${doc?.albaranNum || 'N/A'} (total detectado: ${formatAmountEuro(doc?.totalDetected)}): ${doc?.url || buildDriveFileLink(doc?.fileId) || 'No disponible'}`)
-        : (Array.isArray(compareResult?.incongruentAlbaranes) && compareResult.incongruentAlbaranes.length
-          ? compareResult.incongruentAlbaranes.map((num) => `- Albarán ${num} (total detectado: No disponible): link no disponible`)
-          : ['- No disponible']);
-      const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-      const htmlIncongruentLinks = (Array.isArray(compareResult?.incongruentAlbaranDocs) && compareResult.incongruentAlbaranDocs.length)
-        ? compareResult.incongruentAlbaranDocs
-            .map((doc) => {
-              const num = escapeHtml(doc?.albaranNum || 'N/A');
-              const fileName = escapeHtml(doc?.fileName || 'Nombre no disponible');
-              const url = doc?.url || buildDriveFileLink(doc?.fileId);
-              if (url) {
-                return `<li>Albarán <strong>${num}</strong> (<strong>${fileName}</strong>): <a href="${escapeHtml(url)}">Abrir en Drive</a></li>`;
-              }
-              return `<li>Albarán <strong>${num}</strong> (<strong>${fileName}</strong>): No disponible</li>`;
-            })
-            .join('')
-        : incongruentAlbaranLinks.map(line => `<li>${escapeHtml(line)}</li>`).join('');
-      const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
-      // const compareIssues = buildPrimaryEmailIssueLines(compareResult, criticalAlert.severeAlbaranes)
-      //   .map(addEuroSymbolToAmounts);
-      const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
-      // const htmlIssues = compareIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
-
-      await sendEmailNotification(
-        `Incongruencias en factura ⚠️ ${facturaRef}`,
-        [
-          `Factura comparada: ${facturaRef}`,
-          `Albaranes comparados: ${albaranesLabel}`,
-          `Total factura: ${facturaTotalLabel}`,
-          `Total albaranes: ${albaranesTotalLabel}`,
-          `Link factura original: ${facturaDriveLink || 'No disponible'}`,
-          'Links albaranes con incongruencias:',
-          ...incongruentAlbaranLinks,
-          '',
-          'Albaranes correctos (número y nombre guardado):',
-          ...congruentAlbaranSummary,
-          compareMessage
-        ].join('\n'),
-        `
-          <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
-            <h2 style="margin:0 0 12px;color:#8a1c1c;">⚠️ <strong>Incongruencias en factura</strong></h2>
-            <p><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-            <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
-            <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
-            <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-            <p><strong>Factura original:</strong> ${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir en Drive</a>` : 'No disponible'}</p>
-
-            <h3 style="margin:14px 0 8px;">❌ <strong>Albaranes con incongruencias</strong></h3>
-            <ul>${htmlIncongruentLinks || '<li>No disponible</li>'}</ul>
-
-            <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
-            <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
-          </div>
-        `
-      );
+      const emailPayload = buildComparisonEmailPayload({
+        compareResult,
+        fileName: attachment?.filename || 'Factura',
+        facturaRef,
+        albaranesLabel,
+        facturaTotalLabel,
+        albaranesTotalLabel,
+        facturaDriveLink
+      });
+      await sendEmailNotification(emailPayload.subject, emailPayload.text, emailPayload.html);
       // SOLICITUD CLIENTE: no enviar email adicional por alertas IA/no-totales.
     } else if (compareResult?.ok) {
       emitToRenderer('queue-event', { type: 'step', id: queueId, step: 'email' });
@@ -3842,31 +3972,16 @@ async function processBillingAttachmentAsFactura(attachment) {
       // const confidenceLines = buildModelConfidenceEmailLines(analysisResult?.analysis || '');
       // const extractionWarningsLines = buildExtractionWarningsEmailLines(analysisResult?.analysis || '');
       // const criticalAlert = buildCriticalAlertContext(compareResult, analysisResult?.analysis || '');
-      const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-      const htmlCongruentSummary = congruentAlbaranSummary.map(line => `<li>${escapeHtml(line)}</li>`).join('');
-
-      await sendEmailNotification(
-        `Factura ✅ ${facturaRef} bien`,
-        [
-          `Factura comparada: ${facturaRef}`,
-          `Albaranes comparados: ${albaranesLabel}`,
-          `Total factura: ${facturaTotalLabel}`,
-          `Total albaranes: ${albaranesTotalLabel}`,
-          'Se han comparado correctamente y todo bien.'
-        ].join('\n'),
-        `
-          <div style="font-family:Arial,sans-serif;color:#222;line-height:1.5;max-width:760px;">
-            <h2 style="margin:0 0 12px;color:#17693a;">✅ <strong>Factura validada correctamente</strong></h2>
-            <p><strong>Factura comparada:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
-            <p><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
-            <p><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
-            <p><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
-            <h3 style="margin:14px 0 8px;">✅ <strong>Albaranes correctos</strong></h3>
-            <ul>${htmlCongruentSummary || '<li>No disponible</li>'}</ul>
-            <p><em>Se han comparado correctamente y todo bien.</em></p>
-          </div>
-        `
-      );
+      const emailPayload = buildComparisonEmailPayload({
+        compareResult,
+        fileName: attachment?.filename || 'Factura',
+        facturaRef,
+        albaranesLabel,
+        facturaTotalLabel,
+        albaranesTotalLabel,
+        facturaDriveLink
+      });
+      await sendEmailNotification(emailPayload.subject, emailPayload.text, emailPayload.html);
       // SOLICITUD CLIENTE: no enviar email adicional por baja confianza IA.
     }
   } catch (error) {

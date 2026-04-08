@@ -15,6 +15,7 @@ const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 
 const queueList = document.getElementById('upload-queue-list');
+const queueTimeEstimateEl = document.getElementById('queue-time-estimate');
 const queueBulkControls = document.getElementById('queue-bulk-controls');
 const queueSelectAllBtn = document.getElementById('queue-select-all-btn');
 const queueCancelSelectedBtn = document.getElementById('queue-cancel-selected-btn');
@@ -22,6 +23,8 @@ const uploadQueue = new Map();
 const canceledQueueIds = new Set();
 const selectedQueueIds = new Set();
 const TERMINAL_QUEUE_STATUSES = new Set(['Error', 'Cancelado', 'Enviado', 'Movido', 'Email']);
+const ESTIMATED_SECONDS_PER_DOC_MIN = 90;
+const ESTIMATED_SECONDS_PER_DOC_MAX = 120;
 let queueCompletionNotified = false;
 const startupStatusEl = document.getElementById('startup-status');
 const startupOverlay = document.getElementById('startup-overlay');
@@ -145,6 +148,44 @@ function canQueueItemBeCancelled(item) {
 
 function isQueueTerminalSuccessStatus(status) {
   return ['Enviado', 'Movido', 'Email'].includes(status);
+}
+
+function formatDurationFromSeconds(totalSeconds = 0) {
+  const secs = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const minutes = Math.floor(secs / 60);
+  const seconds = secs % 60;
+
+  if (minutes <= 0) {
+    return `${seconds}s`;
+  }
+
+  if (seconds === 0) {
+    return `${minutes} min`;
+  }
+
+  return `${minutes} min ${seconds}s`;
+}
+
+function refreshQueueTimeEstimate() {
+  if (!queueTimeEstimateEl) return;
+
+  const pendingItemsCount = Array.from(uploadQueue.values())
+    .filter((item) => item && !TERMINAL_QUEUE_STATUSES.has(item.status))
+    .length;
+
+  if (!pendingItemsCount) {
+    queueTimeEstimateEl.classList.remove('active');
+    queueTimeEstimateEl.textContent = '';
+    return;
+  }
+
+  const minSeconds = pendingItemsCount * ESTIMATED_SECONDS_PER_DOC_MIN;
+  const maxSeconds = pendingItemsCount * ESTIMATED_SECONDS_PER_DOC_MAX;
+  const minLabel = formatDurationFromSeconds(minSeconds);
+  const maxLabel = formatDurationFromSeconds(maxSeconds);
+
+  queueTimeEstimateEl.textContent = `Tiempo estimado restante: ${minLabel} - ${maxLabel} (${pendingItemsCount} documento(s) pendiente(s)).`;
+  queueTimeEstimateEl.classList.add('active');
 }
 
 function areAllExpectedAlbaranesReady(compareResult = {}) {
@@ -2828,6 +2869,7 @@ function renderQueue() {
     queueList.innerHTML = '<p style="color:#666">No hay archivos en cola.</p>';
     queueCompletionNotified = false;
     selectedQueueIds.clear();
+    refreshQueueTimeEstimate();
     return;
   }
 
@@ -2953,6 +2995,8 @@ function renderQueue() {
   } else if (!allFinished) {
     queueCompletionNotified = false;
   }
+
+  refreshQueueTimeEstimate();
 }
 
 if (queueSelectAllBtn) {

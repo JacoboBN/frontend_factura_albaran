@@ -286,6 +286,39 @@
       font-weight: 700;
       cursor: help;
       user-select: none;
+      position: relative;
+    }
+
+    .info-dot[data-tooltip]:hover::after,
+    .info-dot[data-tooltip]:focus-visible::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      right: 0;
+      top: calc(100% + 8px);
+      width: min(360px, 75vw);
+      background: #1f2937;
+      color: #fff;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 500;
+      z-index: 2000;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+      text-align: left;
+      white-space: normal;
+    }
+
+    .info-dot[data-tooltip]:hover::before,
+    .info-dot[data-tooltip]:focus-visible::before {
+      content: '';
+      position: absolute;
+      top: calc(100% + 2px);
+      right: 6px;
+      border-width: 6px;
+      border-style: solid;
+      border-color: transparent transparent #1f2937 transparent;
+      z-index: 2001;
     }
 
     .search-actions {
@@ -475,6 +508,22 @@
 
     .queue-header h3 {
       margin: 0;
+    }
+
+    .queue-estimate {
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #eef6ff;
+      border: 1px solid #cfe2ff;
+      color: #164a83;
+      font-size: 13px;
+      font-weight: 600;
+      display: none;
+    }
+
+    .queue-estimate.active {
+      display: block;
     }
 
     .queue-bulk-controls {
@@ -917,8 +966,9 @@
               <button id="force-compare-btn" class="btn btn-secondary small" type="button">Probar comparación</button>
               <span
                 class="info-dot"
-                title="Al pinchar en dicho botón se forzará la vista de facturas y albaranes que se hayan podido quedar en cola sin compararse."
+                data-tooltip="Al pulsar este botón se forzará la comparación de facturas pendientes con los albaranes disponibles, para procesar documentos que se hayan quedado en cola sin compararse."
                 aria-label="Información sobre Probar comparación"
+                tabindex="0"
               >i</span>
             </div>
           </div>
@@ -946,6 +996,7 @@
                   <button class="btn btn-danger small" id="queue-cancel-selected-btn">Cancelar seleccionados</button>
                 </div>
               </div>
+              <div class="queue-estimate" id="queue-time-estimate"></div>
               <div class="queue-list" id="upload-queue-list">
                 <p style="color:#666">No hay archivos en cola.</p>
               </div>
