@@ -2159,6 +2159,10 @@ ipcMain.handle('get-user-info', async () => {
   }
 });
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 ipcMain.handle('get-billing-config', async () => {
   const mode = store.get('billingMode') || null;
   const email = store.get('billingEmail') || null;

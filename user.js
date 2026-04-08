@@ -15,8 +15,12 @@ const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 
 const queueList = document.getElementById('upload-queue-list');
+const queueBulkControls = document.getElementById('queue-bulk-controls');
+const queueSelectAllBtn = document.getElementById('queue-select-all-btn');
+const queueCancelSelectedBtn = document.getElementById('queue-cancel-selected-btn');
 const uploadQueue = new Map();
 const canceledQueueIds = new Set();
+const selectedQueueIds = new Set();
 const TERMINAL_QUEUE_STATUSES = new Set(['Error', 'Cancelado', 'Enviado', 'Movido', 'Email']);
 let queueCompletionNotified = false;
 const startupStatusEl = document.getElementById('startup-status');
@@ -43,6 +47,7 @@ const compareModeTotalesBtn = document.getElementById('compare-mode-totales');
 const compareModeComplejoBtn = document.getElementById('compare-mode-complejo');
 const uploadOrderFacturasFirstBtn = document.getElementById('upload-order-facturas-first');
 const uploadOrderAlbaranesFirstBtn = document.getElementById('upload-order-albaranes-first');
+const appVersionEl = document.getElementById('app-version');
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const STARTUP_QUEUE_STEPS = ['Esperando', 'OCR', 'IA', 'Moviendo', 'Movido'];
@@ -104,6 +109,36 @@ if (uploadOrderAlbaranesFirstBtn) {
 }
 
 setUploadOrder('facturas-first');
+
+function normalizeQueueStep(step) {
+  const rawStep = String(step || '').trim().toLowerCase();
+  if (['pendiente', 'esperando', 'en cola', 'cola', 'queued', 'queue'].includes(rawStep)) {
+    return 'Esperando';
+  }
+  if (rawStep === 'subiendo') return 'Subiendo';
+  if (rawStep === 'ocr') return 'OCR';
+  if (rawStep === 'ia') return 'IA';
+  if (rawStep === 'esperando albaranes') return 'Esperando albaranes';
+  if (rawStep === 'comparando') return 'Comparando';
+  if (rawStep === 'comparado') return 'Comparado';
+  if (rawStep === 'email') return 'Email';
+  if (rawStep === 'enviando' || rawStep === 'moviendo') return 'Moviendo';
+  if (rawStep === 'enviado' || rawStep === 'movido') return 'Movido';
+  return step;
+}
+
+function canQueueItemBeSelectedForBulkCancel(item) {
+  if (!item) return false;
+  return ['Esperando', 'Subiendo', 'IA'].includes(item.status);
+}
+
+function canQueueItemBeCancelled(item) {
+  return canQueueItemBeSelectedForBulkCancel(item);
+}
+
+function isQueueTerminalSuccessStatus(status) {
+  return ['Enviado', 'Movido', 'Email'].includes(status);
+}
 
 function areAllExpectedAlbaranesReady(compareResult = {}) {
   const expected = Array.isArray(compareResult?.expectedAlbaranes) ? compareResult.expectedAlbaranes : [];
@@ -2364,6 +2399,16 @@ async function showUploadSection(info) {
   uiLog('log', 'showUploadSection:start', { email: info?.email });
   showSection('upload');
   document.getElementById('user-email').textContent = info.email;
+  try {
+    const appVersion = await ipcRenderer.invoke('get-app-version');
+    if (appVersionEl) {
+      appVersionEl.textContent = `Versión ${appVersion || '--'}`;
+    }
+  } catch {
+    if (appVersionEl) {
+      appVersionEl.textContent = 'Versión --';
+    }
+  }
   const billingConfig = await ipcRenderer.invoke('get-billing-config');
   setBillingEmailLabel(billingConfig?.email || null);
 
@@ -2651,20 +2696,14 @@ function updateQueueStep(id, step) {
   const item = uploadQueue.get(id);
   if (!item) return;
   if (item.status === 'Cancelado') return;
-  const rawStep = String(step || '').trim().toLowerCase();
-  let normalizedStep = step;
-
-  if (['pendiente', 'esperando', 'en cola', 'cola', 'queued', 'queue'].includes(rawStep)) {
-    normalizedStep = 'Esperando';
-  } else if (rawStep === 'comparado') {
-    normalizedStep = 'Comparado';
-  } else if (rawStep === 'email') {
-    normalizedStep = 'Email';
-  }
+  const normalizedStep = normalizeQueueStep(step);
 
   item.status = normalizedStep;
   item.error = null;
   uploadQueue.set(id, item);
+  if (!canQueueItemBeSelectedForBulkCancel(item)) {
+    selectedQueueIds.delete(id);
+  }
   renderQueue();
 }
 
@@ -2675,6 +2714,7 @@ function markQueueCancelled(id, message = 'Cancelado por el usuario') {
   item.error = message;
   uploadQueue.set(id, item);
   canceledQueueIds.add(id);
+  selectedQueueIds.delete(id);
   renderQueue();
 }
 
@@ -2682,7 +2722,7 @@ function requestCancelQueueItem(id) {
   const item = uploadQueue.get(id);
   if (!item) return;
 
-  if (item.status === 'Error' || item.status === 'Cancelado' || item.status === 'Enviado' || item.status === 'Movido' || item.status === 'Email') {
+  if (!canQueueItemBeCancelled(item)) {
     return;
   }
 
@@ -2698,15 +2738,85 @@ function markQueueError(id, message) {
   item.status = 'Error';
   item.error = message || 'Error';
   uploadQueue.set(id, item);
+  selectedQueueIds.delete(id);
   renderQueue();
+}
+
+function toggleQueueItemSelection(id) {
+  const item = uploadQueue.get(id);
+  if (!canQueueItemBeSelectedForBulkCancel(item)) {
+    selectedQueueIds.delete(id);
+    renderQueue();
+    return;
+  }
+
+  if (selectedQueueIds.has(id)) {
+    selectedQueueIds.delete(id);
+  } else {
+    selectedQueueIds.add(id);
+  }
+  renderQueue();
+}
+
+function toggleSelectAllEligibleQueueItems() {
+  const eligibleIds = Array.from(uploadQueue.entries())
+    .filter(([, item]) => canQueueItemBeSelectedForBulkCancel(item))
+    .map(([id]) => id);
+
+  if (!eligibleIds.length) return;
+
+  const allSelected = eligibleIds.every((id) => selectedQueueIds.has(id));
+  if (allSelected) {
+    eligibleIds.forEach((id) => selectedQueueIds.delete(id));
+  } else {
+    eligibleIds.forEach((id) => selectedQueueIds.add(id));
+  }
+
+  renderQueue();
+}
+
+function requestCancelSelectedQueueItems() {
+  const idsToCancel = Array.from(selectedQueueIds)
+    .filter((id) => canQueueItemBeSelectedForBulkCancel(uploadQueue.get(id)));
+
+  if (!idsToCancel.length) {
+    showStatus('No hay archivos seleccionados para cancelar.', 'error');
+    return;
+  }
+
+  const confirmed = confirm(`¿Seguro que quieres cancelar ${idsToCancel.length} archivo(s) seleccionados?`);
+  if (!confirmed) return;
+
+  idsToCancel.forEach((id) => markQueueCancelled(id));
+  showStatus(`${idsToCancel.length} archivo(s) cancelado(s).`, 'success');
 }
 
 function renderQueue() {
   if (!queueList) return;
 
+  const eligibleIds = Array.from(uploadQueue.entries())
+    .filter(([, item]) => canQueueItemBeSelectedForBulkCancel(item))
+    .map(([id]) => id);
+
+  if (queueBulkControls) {
+    queueBulkControls.classList.toggle('hidden', eligibleIds.length === 0);
+  }
+
+  if (queueSelectAllBtn) {
+    const allEligibleSelected = eligibleIds.length > 0 && eligibleIds.every((id) => selectedQueueIds.has(id));
+    queueSelectAllBtn.textContent = allEligibleSelected ? 'Deseleccionar todo' : 'Seleccionar todo';
+  }
+
+  Array.from(selectedQueueIds).forEach((id) => {
+    if (!canQueueItemBeSelectedForBulkCancel(uploadQueue.get(id))) {
+      selectedQueueIds.delete(id);
+    }
+  });
+
   if (uploadQueue.size === 0) {
     queueList.innerHTML = '<p style="color:#666">No hay archivos en cola.</p>';
     queueCompletionNotified = false;
+    selectedQueueIds.clear();
     return;
   }
 
@@ -2716,19 +2826,34 @@ function renderQueue() {
       ? item.steps
       : DEFAULT_QUEUE_STEPS;
     const currentIndex = steps.indexOf(item.status);
+    const isTerminalSuccess = isQueueTerminalSuccessStatus(item.status);
 
     const wrapper = document.createElement('div');
     wrapper.className = 'queue-item';
 
     const headerRow = document.createElement('div');
-    headerRow.style.display = 'flex';
-    headerRow.style.alignItems = 'center';
-    headerRow.style.justifyContent = 'space-between';
-    headerRow.style.gap = '8px';
+    headerRow.className = 'queue-item-header';
+
+    const leftRow = document.createElement('div');
+    leftRow.className = 'queue-item-left';
+
+    const canSelectForBulk = canQueueItemBeSelectedForBulkCancel(item);
+    if (canSelectForBulk) {
+      const selectCb = document.createElement('input');
+      selectCb.type = 'checkbox';
+      selectCb.className = 'queue-select-checkbox';
+      selectCb.checked = selectedQueueIds.has(id);
+      selectCb.title = `Seleccionar ${item.fileName}`;
+      selectCb.setAttribute('aria-label', `Seleccionar ${item.fileName}`);
+      selectCb.addEventListener('change', () => toggleQueueItemSelection(id));
+      leftRow.appendChild(selectCb);
+    }
 
     const name = document.createElement('div');
     name.className = 'file-name';
     name.textContent = item.fileName;
+    leftRow.appendChild(name);
+    headerRow.appendChild(leftRow);
 
     const statusRow = document.createElement('div');
     statusRow.className = 'status-row';
@@ -2742,6 +2867,8 @@ function renderQueue() {
         stepEl.classList.add('error');
       } else if (item.status === 'Cancelado') {
         stepEl.classList.add('error');
+      } else if (isTerminalSuccess) {
+        stepEl.classList.add('done');
       } else if (item.status === step) {
         stepEl.classList.add('active');
       } else if (currentIndex >= 0 && steps.indexOf(step) < currentIndex) {
@@ -2755,11 +2882,11 @@ function renderQueue() {
       const errorText = document.createElement('div');
       errorText.style.color = item.status === 'Cancelado' ? '#856404' : '#721c24';
       errorText.style.fontSize = '12px';
-      errorText.textContent = `Error: ${item.error}`;
+      errorText.textContent = `${item.status === 'Cancelado' ? 'Cancelado' : 'Error'}: ${item.error}`;
       wrapper.appendChild(errorText);
     }
 
-    const canCancel = !['Error', 'Cancelado', 'Enviado', 'Movido', 'Email'].includes(item.status);
+    const canCancel = canQueueItemBeCancelled(item);
     if (canCancel) {
       const controls = document.createElement('div');
       controls.style.display = 'flex';
@@ -2800,7 +2927,6 @@ function renderQueue() {
       headerRow.appendChild(controls);
     }
 
-    headerRow.prepend(name);
     wrapper.appendChild(headerRow);
     wrapper.appendChild(statusRow);
 
@@ -2816,4 +2942,12 @@ function renderQueue() {
   } else if (!allFinished) {
     queueCompletionNotified = false;
   }
+}
+
+if (queueSelectAllBtn) {
+  queueSelectAllBtn.addEventListener('click', toggleSelectAllEligibleQueueItems);
+}
+
+if (queueCancelSelectedBtn) {
+  queueCancelSelectedBtn.addEventListener('click', requestCancelSelectedQueueItems);
 }

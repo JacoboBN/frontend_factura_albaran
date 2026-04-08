@@ -441,6 +441,57 @@
       color: #333;
     }
 
+    .queue-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .queue-header h3 {
+      margin: 0;
+    }
+
+    .queue-bulk-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .queue-bulk-controls.hidden {
+      display: none;
+    }
+
+    .queue-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .queue-item-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .queue-select-checkbox {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .app-version {
+      margin-top: 4px;
+      padding-top: 2px;
+      font-size: 12px;
+      color: #4f4f4f;
+      font-weight: 600;
+    }
+
     .queue-list {
       display: flex;
       flex-direction: column;
@@ -800,6 +851,8 @@
 
           <button class="btn btn-secondary small" id="logout-btn">Cerrar sesión</button>
 
+          <div class="app-version" id="app-version">Versión --</div>
+
           <div class="compare-mode-panel">
             <div class="compare-mode-title">Modo de comparación</div>
             <div class="compare-mode-toggle" role="group" aria-label="Modo de comparación">
@@ -855,7 +908,13 @@
             <div id="files-list" class="files-grid"></div>
             <div class="startup-status" id="startup-status">Estado de inicio: esperando...</div>
             <div class="queue-panel" id="upload-queue-panel">
-              <h3>Seguimiento de archivos</h3>
+              <div class="queue-header">
+                <h3>Seguimiento de archivos</h3>
+                <div class="queue-bulk-controls hidden" id="queue-bulk-controls">
+                  <button class="btn btn-secondary small" id="queue-select-all-btn">Seleccionar todo</button>
+                  <button class="btn btn-danger small" id="queue-cancel-selected-btn">Cancelar seleccionados</button>
+                </div>
+              </div>
               <div class="queue-list" id="upload-queue-list">
                 <p style="color:#666">No hay archivos en cola.</p>
               </div>
