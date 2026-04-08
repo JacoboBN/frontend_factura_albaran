@@ -1,6 +1,6 @@
 {
   "name": "driveshare-app",
-  "version": "1.1.21",
+  "version": "1.1.22",
   "description": "DriveShare - App de escritorio",
   "main": "main.js",
   "scripts": {
@@ -22,7 +22,6 @@
         "owner": "JacoboBN",
         "repo": "frontend_factura_albaran",
         "releaseType": "release"
-
       }
     ],
     "win": {
