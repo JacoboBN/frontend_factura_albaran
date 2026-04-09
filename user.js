@@ -129,6 +129,12 @@ if (uploadOrderAlbaranesFirstBtn) {
   uploadOrderAlbaranesFirstBtn.title = 'Modo desactivado: flujo único (facturas primero)';
 }
 
+if (forceCompareBtn) {
+  // Solicitud cliente: desactivar comparación manual forzada.
+  forceCompareBtn.disabled = true;
+  forceCompareBtn.title = 'Desactivado por configuración';
+}
+
 setUploadOrder('facturas-first');
 
 function renderUpdaterStatus(payload = {}) {
@@ -406,7 +412,26 @@ async function comparePendingFacturasIfReady() {
           `Total factura: ${facturaTotalLabel}`,
           `Total albaranes: ${albaranesTotalLabel}`,
           compareResult?.message || 'Comparación completada.'
-        ].join('\n')
+        ].join('\n'),
+        html: `
+          <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+            <h2 style="margin: 0 0 12px; color: ${compareResult?.ok ? '#17693a' : '#8a1c1c'};">
+              ${compareResult?.ok ? '✅ <strong>Factura validada correctamente</strong>' : '⚠️ <strong>Incongruencias encontradas</strong>'}
+            </h2>
+
+            <div style="background:${compareResult?.ok ? '#f6fbf8' : '#f8f9fb'}; border:1px solid ${compareResult?.ok ? '#dcefe3' : '#e6e9ef'}; border-radius:8px; padding:12px; margin-bottom:12px;">
+              <p style="margin:0 0 6px;"><strong>Factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+              <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
+              <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
+              <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
+            </div>
+
+            <div style="margin: 14px 0;">
+              <h3 style="margin:0 0 8px; font-size:15px;">📌 Resumen</h3>
+              <p style="margin:0;">${escapeHtml(compareResult?.message || 'Comparación completada.')}</p>
+            </div>
+          </div>
+        `
       });
 
       const shouldMoveFactura = compareResult?.ok
@@ -1340,7 +1365,8 @@ async function ensureBillingSetup(info, { forceSetup = false } = {}) {
   if (billingConfig?.configured && !forceSetup) {
     uiLog('log', 'ensureBillingSetup:already-configured', billingConfig);
     setBillingEmailLabel(billingConfig.email || null);
-    await ipcRenderer.invoke('start-billing-monitor');
+    // Solicitud cliente: monitor automático desactivado.
+    // await ipcRenderer.invoke('start-billing-monitor');
     return billingConfig;
   }
 
@@ -1377,7 +1403,8 @@ async function ensureBillingSetup(info, { forceSetup = false } = {}) {
           const result = await ipcRenderer.invoke('set-billing-email-same');
           uiLog('log', 'ensureBillingSetup:set-billing-email-same:ok', result);
           setBillingEmailLabel(result?.email || driveEmail || null);
-          await ipcRenderer.invoke('start-billing-monitor');
+          // Solicitud cliente: monitor automático desactivado.
+          // await ipcRenderer.invoke('start-billing-monitor');
           showStatus('Email de facturas configurado.', 'success');
           finish(result || { configured: true, mode: 'same', email: driveEmail });
         } catch (error) {
@@ -1405,7 +1432,8 @@ async function ensureBillingSetup(info, { forceSetup = false } = {}) {
           const billingEmail = billingUser?.email || null;
           uiLog('log', 'ensureBillingSetup:billing-login:ok', { billingEmail });
           setBillingEmailLabel(billingEmail);
-          await ipcRenderer.invoke('start-billing-monitor');
+          // Solicitud cliente: monitor automático desactivado.
+          // await ipcRenderer.invoke('start-billing-monitor');
           showStatus('Email de facturas alternativo configurado.', 'success');
           finish({ configured: true, mode: 'separate', email: billingEmail });
         } catch (error) {
@@ -1463,14 +1491,11 @@ async function checkSession({ forceBillingSetup = false } = {}) {
       );
       console.warn('No se pudieron crear carpetas estándar:', folderError);
     }
-    // IMPORTANTE: quitar overlay antes de preguntar el email de facturas
-    // para que la pantalla de selección sea usable y no se quede bloqueada.
+    // Solicitud cliente: desactivar procesos automáticos no ligados a Subir Albarán/Factura.
+    // Se omiten setup de monitor de facturas por email y escaneo inicial de carpetas.
     toggleStartupOverlay(false);
-    await ensureBillingSetup(info, { forceSetup: forceBillingSetup });
-    uiLog('log', 'checkSession:billing-setup:ok');
+    setBillingEmailLabel(info?.email || null);
     showUploadSection(info);
-    await ipcRenderer.invoke('scan-no-procesado');
-    uiLog('log', 'checkSession:scan-no-procesado:ok');
   } else {
     uiLog('warn', 'checkSession:no-active-session');
     showSection('login');
@@ -3097,50 +3122,9 @@ if (queueCancelSelectedBtn) {
   queueCancelSelectedBtn.addEventListener('click', requestCancelSelectedQueueItems);
 }
 
-if (forceCompareBtn) {
-  forceCompareBtn.addEventListener('click', async () => {
-    try {
-      forceCompareBtn.disabled = true;
-      showStatus('Forzando comparación de facturas pendientes...', 'loading');
-
-      const result = await ipcRenderer.invoke('force-pending-comparison');
-      const compared = Number(result?.compared || 0);
-      const total = Number(result?.totalFacturas || 0);
-      const failed = Number(result?.failed || 0);
-      const comparedFileNames = Array.isArray(result?.comparedFileNames)
-        ? result.comparedFileNames.map(name => String(name || '').trim().toLowerCase()).filter(Boolean)
-        : [];
-
-      if (comparedFileNames.length) {
-        const comparedSet = new Set(comparedFileNames);
-        for (const [queueId, item] of uploadQueue.entries()) {
-          const itemName = String(item?.fileName || '').trim().toLowerCase();
-          if (!itemName) continue;
-          if (item?.status !== 'Esperando albaranes') continue;
-          if (!comparedSet.has(itemName)) continue;
-          updateQueueStep(queueId, 'Comparado');
-          updateQueueStep(queueId, 'Email');
-        }
-
-        for (const [queueId, pending] of pendingFacturaComparisons.entries()) {
-          const pendingName = String(pending?.item?.fileName || '').trim().toLowerCase();
-          if (!pendingName) continue;
-          if (!comparedSet.has(pendingName)) continue;
-          pendingFacturaComparisons.delete(queueId);
-        }
-      }
-
-      if (total === 0) {
-        showStatus('No hay facturas pendientes en No comparado para comparar.', 'success');
-      } else if (failed > 0) {
-        showStatus(`Comparación forzada completada con incidencias (${compared}/${total}, errores: ${failed}).`, 'error');
-      } else {
-        showStatus(`Comparación forzada completada correctamente (${compared}/${total}).`, 'success');
-      }
-    } catch (error) {
-      showStatus(`Error al forzar comparación: ${error?.message || error}`, 'error');
-    } finally {
-      forceCompareBtn.disabled = false;
-    }
-  });
-}
+// Solicitud cliente: mantener botón visible pero desactivar totalmente la comparación forzada manual.
+// if (forceCompareBtn) {
+//   forceCompareBtn.addEventListener('click', async () => {
+//     ...
+//   });
+// }

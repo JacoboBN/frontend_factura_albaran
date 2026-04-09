@@ -1853,7 +1853,8 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
       store.set('billingMode', 'separate');
       store.set('billingSessionId', verifiedSessionId);
       store.set('billingEmail', userData?.email || null);
-      startBillingMonitor();
+      // Solicitud cliente: monitor de email desactivado.
+      // startBillingMonitor();
     } else {
       store.set('sessionId', verifiedSessionId);
 
@@ -1867,7 +1868,8 @@ ipcMain.handle('google-login', async (event, isUser = false, purpose = 'primary'
         }
         store.set('billingEmail', userData?.email || null);
       }
-      startBillingMonitor();
+      // Solicitud cliente: monitor de email desactivado.
+      // startBillingMonitor();
     }
     return userData;
     
@@ -2450,24 +2452,28 @@ ipcMain.handle('set-billing-email-same', async () => {
     store.delete('billingRefreshToken');
   }
   store.set('billingEmail', email);
-  startBillingMonitor();
+  // Solicitud cliente: desactivar procesos automáticos fuera del flujo manual de subida.
+  // startBillingMonitor();
 
   return { configured: true, mode: 'same', email };
 });
 
 ipcMain.handle('start-billing-monitor', async () => {
-  startBillingMonitor();
-  return { started: true };
+  // Solicitud cliente: monitor de email desactivado.
+  // startBillingMonitor();
+  return { started: false, disabled: true };
 });
 
 ipcMain.handle('scan-no-procesado', async () => {
-  await scanNoProcesado('login');
-  return { success: true };
+  // Solicitud cliente: escaneo automático de carpetas desactivado.
+  // await scanNoProcesado('login');
+  return { success: true, disabled: true };
 });
 
 ipcMain.handle('force-pending-comparison', async () => {
-  const result = await forcePendingFacturasComparison('manual');
-  return { success: true, ...result };
+  // Solicitud cliente: comparación forzada manual desactivada.
+  // const result = await forcePendingFacturasComparison('manual');
+  return { success: true, disabled: true, totalFacturas: 0, compared: 0, failed: 0 };
 });
 
 ipcMain.handle('ensure-standard-folders', async () => {
