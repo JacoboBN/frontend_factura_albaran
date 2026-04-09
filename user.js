@@ -353,6 +353,70 @@ function hasTotalTxtForAlbaran(files = [], albaranNum = '') {
   });
 }
 
+function formatAlbaranesListLabel(items = []) {
+  const normalized = (Array.isArray(items) ? items : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+
+  if (!normalized.length) {
+    return 'Ninguno';
+  }
+
+  return normalized.join(', ');
+}
+
+async function sendMissingAlbaranesAlertForPendingFactura({
+  item = null,
+  analysisText = '',
+  expectedAlbaranes = [],
+  missingAlbaranes = [],
+  availableAlbaranes = []
+} = {}) {
+  const recipientEmail = await getCurrentSessionEmail();
+  const facturaRef = getFacturaReferenceForEmail(analysisText, item?.fileName || 'XX');
+  const expectedLabel = formatAlbaranesListLabel(expectedAlbaranes);
+  const availableLabel = formatAlbaranesListLabel(availableAlbaranes);
+  const missingLabel = formatAlbaranesListLabel(missingAlbaranes);
+
+  const subject = `⚠️ Factura en espera por albaranes faltantes (${facturaRef})`;
+  const text = [
+    'AVISO: FACTURA PENDIENTE POR ALBARANES FALTANTES',
+    '',
+    `Factura: ${facturaRef}`,
+    `Nombre archivo factura: ${item?.fileName || 'N/A'}`,
+    `Albaranes esperados: ${expectedLabel}`,
+    `Albaranes disponibles: ${availableLabel}`,
+    `Albaranes faltantes: ${missingLabel}`,
+    '',
+    'Estado actual: Esperando albaranes',
+    'Acción: No se mueve ni se marca como comparada/procesada hasta que estén todos los albaranes.'
+  ].join('\n');
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 760px;">
+      <h2 style="margin: 0 0 12px; color: #8a1c1c;">⚠️ <strong>Factura en espera por albaranes faltantes</strong></h2>
+
+      <div style="background:#f8f9fb; border:1px solid #e6e9ef; border-radius:8px; padding:12px; margin-bottom:12px;">
+        <p style="margin:0 0 6px;"><strong>Factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+        <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(item?.fileName || 'N/A')}</strong></p>
+        <p style="margin:0 0 6px;"><strong>Albaranes esperados:</strong> <strong>${escapeHtml(expectedLabel)}</strong></p>
+        <p style="margin:0 0 6px;"><strong>Albaranes disponibles:</strong> <strong>${escapeHtml(availableLabel)}</strong></p>
+        <p style="margin:0;"><strong>Albaranes faltantes:</strong> <strong>${escapeHtml(missingLabel)}</strong></p>
+      </div>
+
+      <p style="margin:0;"><strong>Estado actual:</strong> Esperando albaranes</p>
+      <p style="margin:6px 0 0;"><strong>Acción:</strong> No se mueve ni se marca como comparada/procesada hasta que estén todos los albaranes.</p>
+    </div>
+  `;
+
+  await ipcRenderer.invoke('send-email', {
+    to: recipientEmail,
+    subject,
+    text,
+    html
+  });
+}
+
 async function comparePendingFacturasIfReady() {
   const pendingEntries = Array.from(pendingFacturaComparisons.entries());
   if (!pendingEntries.length) return;
@@ -377,6 +441,24 @@ async function comparePendingFacturasIfReady() {
         const missing = expectedAlbaranes.filter(num => !hasTotalTxtForAlbaran(files, num));
         if (missing.length) {
           updateQueueStep(queueId, 'Esperando albaranes');
+          const missingSet = new Set(missing.map((num) => String(num || '').trim()).filter(Boolean));
+          const available = expectedAlbaranes.filter((num) => {
+            const clean = String(num || '').trim();
+            return clean && !missingSet.has(clean);
+          });
+          try {
+            await sendMissingAlbaranesAlertForPendingFactura({
+              item,
+              analysisText,
+              expectedAlbaranes,
+              missingAlbaranes: missing,
+              availableAlbaranes: available
+            });
+            showStatus(`Aviso enviado: faltan albaranes para ${item?.fileName || 'factura'}.`, 'loading');
+          } catch (emailError) {
+            console.warn('No se pudo enviar aviso de albaranes faltantes:', emailError);
+            showStatus(`No se pudo enviar aviso por albaranes faltantes: ${emailError?.message || emailError}`, 'error');
+          }
           continue;
         }
       }
@@ -390,6 +472,29 @@ async function comparePendingFacturasIfReady() {
 
       if (!areAllExpectedAlbaranesReady(compareResult)) {
         updateQueueStep(queueId, 'Esperando albaranes');
+        const expectedFromCompare = Array.isArray(compareResult?.expectedAlbaranes)
+          ? compareResult.expectedAlbaranes
+          : [];
+        const matchedFromCompare = Array.isArray(compareResult?.matchedAlbaranes)
+          ? compareResult.matchedAlbaranes
+          : [];
+        const matchedSet = new Set(matchedFromCompare.map((num) => String(num || '').trim()).filter(Boolean));
+        const missingFromCompare = expectedFromCompare
+          .map((num) => String(num || '').trim())
+          .filter((num) => num && !matchedSet.has(num));
+        try {
+          await sendMissingAlbaranesAlertForPendingFactura({
+            item,
+            analysisText,
+            expectedAlbaranes: expectedFromCompare,
+            missingAlbaranes: missingFromCompare,
+            availableAlbaranes: matchedFromCompare
+          });
+          showStatus(`Aviso enviado: faltan albaranes para ${item?.fileName || 'factura'}.`, 'loading');
+        } catch (emailError) {
+          console.warn('No se pudo enviar aviso de albaranes faltantes (compare):', emailError);
+          showStatus(`No se pudo enviar aviso por albaranes faltantes: ${emailError?.message || emailError}`, 'error');
+        }
         continue;
       }
 
@@ -1904,9 +2009,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
               : targetLabel;
             showStatus(`¡${item.fileName} procesado y enviado a ${finalLabel}!`, 'success');
 
-            if (docType !== 'factura' && currentUploadOrder === 'facturas-first') {
-              await comparePendingFacturasIfReady();
-            }
           } catch (error) {
             uiLog('error', 'uploadFilesToFolder:item-error', {
               fileName: item.fileName,
@@ -1915,6 +2017,10 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
             markQueueError(item.queueId, error.message || 'Error desconocido');
             showStatus(`Error al procesar ${item.fileName}: ${error.message}`, 'error');
           }
+        }
+
+        if (docType !== 'factura' && currentUploadOrder === 'facturas-first') {
+          await comparePendingFacturasIfReady();
         }
       }
 
