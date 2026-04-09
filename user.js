@@ -21,6 +21,7 @@ const queueSelectAllBtn = document.getElementById('queue-select-all-btn');
 const queueCancelSelectedBtn = document.getElementById('queue-cancel-selected-btn');
 const uploadQueue = new Map();
 const canceledQueueIds = new Set();
+const queueFilePathMap = new Map(); // queueId → Drive file ID del archivo subido (para borrarlo de Drive si se cancela antes de finalizar el pipeline IA)
 const selectedQueueIds = new Set();
 const TERMINAL_QUEUE_STATUSES = new Set(['Error', 'Cancelado', 'Enviado', 'Movido', 'Email']);
 const ESTIMATED_SECONDS_PER_DOC_MIN = 90;
@@ -1604,13 +1605,28 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
           count: preparedItems.length,
           docType
         });
-        preparedItems.forEach(item => updateQueueStep(item.queueId, 'IA'));
+        // Registrar el ID del archivo subido en Drive (no ruta local) para poder
+        // borrar exactamente ese archivo si se cancela antes de finalizar la IA.
+        // Además, filtrar cancelados justo antes de enviar al batch de IA.
+        const itemsForIA = [];
+        preparedItems.forEach(item => {
+          if (item.uploadedFileId) queueFilePathMap.set(item.queueId, item.uploadedFileId);
+
+          if (canceledQueueIds.has(item.queueId)) {
+            markQueueCancelled(item.queueId, 'Cancelado por el usuario');
+            return;
+          }
+
+          updateQueueStep(item.queueId, 'IA');
+          itemsForIA.push(item);
+        });
 
         const batchResults = await invokeAnalyzeFilesBatchWithFallback(
-          preparedItems.map(item => ({
+          itemsForIA.map(item => ({
             filePath: item.filePath,
             mimeType: item.mimeType,
             originalName: item.fileName,
+            queueId: item.queueId,
             postProcess: {
               txtFolderId: informesNoComparadoFolder?.id || null,
               sourceDriveFileId: item.uploadedFileId || null,
@@ -1622,14 +1638,23 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
           docType
         );
 
-        for (let idx = 0; idx < preparedItems.length; idx += 1) {
-          const item = preparedItems[idx];
+        for (let idx = 0; idx < itemsForIA.length; idx += 1) {
+          const item = itemsForIA[idx];
           const analysisResult = batchResults[idx] || null;
 
           try {
+            // Si fue cancelado durante la IA (resultado devuelto como cancelled)
+            if (analysisResult?.cancelled) {
+              markQueueCancelled(item.queueId, 'Cancelado por el usuario');
+              showStatus(`${item.fileName} cancelado.`, 'success');
+              queueFilePathMap.delete(item.queueId);
+              continue;
+            }
+
             if (canceledQueueIds.has(item.queueId)) {
               markQueueCancelled(item.queueId);
               showStatus(`${item.fileName} cancelado.`, 'success');
+              queueFilePathMap.delete(item.queueId);
               continue;
             }
 
@@ -2882,6 +2907,21 @@ function markQueueCancelled(id, message = 'Cancelado por el usuario') {
   uploadQueue.set(id, item);
   canceledQueueIds.add(id);
   selectedQueueIds.delete(id);
+
+  // Señalar al proceso principal que cancele el job de IA si estaba en curso
+  try { ipcRenderer.send('cancel-queue-item', id); } catch (e) {}
+
+  // Eliminar el archivo de Drive (No procesado) si fue subido y el proceso se canceló
+  // antes de que el pipeline de IA lo procesara. Se usa el ID exacto del archivo (nunca
+  // el nombre) para evitar borrar un archivo con el mismo nombre pero diferente.
+  const driveFileId = queueFilePathMap.get(id);
+  if (driveFileId) {
+    ipcRenderer.invoke('delete-drive-file', driveFileId).catch((e) => {
+      uiLog('error', 'markQueueCancelled:delete-drive-file:error', serializeUiError(e));
+    });
+  }
+  queueFilePathMap.delete(id);
+
   renderQueue();
 }
 

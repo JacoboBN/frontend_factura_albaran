@@ -72,6 +72,10 @@ const DEFAULT_RETRY_MAX_DELAY_MS = 15000;
 const JOB_POLL_INTERVAL_MS = 2000;   // cada 2 s
 const JOB_POLL_MAX_ATTEMPTS = 150;   // máx ~5 minutos
 
+// Cancelación de items de cola desde el renderer
+const pendingCancellations = new Set(); // queueId → pendiente de cancelar
+const activeJobsByQueueId = new Map();  // queueId → { jobId }
+
 const ANALYZE_ENDPOINTS = {
   albaran: '/analyze/document/albaran/file',
   factura: '/analyze/document/factura/file'
@@ -1076,7 +1080,7 @@ function getLegacyAnalyzeTextEndpoint(docType) {
   return `${BACKEND_URL}${endpoint}`;
 }
 
-async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = '', docType = 'albaran', postProcess = null) {
+async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = '', docType = 'albaran', postProcess = null, queueId = null) {
   const sessionId = store.get('sessionId');
   if (!sessionId) {
     throw new Error('Sesión requerida para analizar documento');
@@ -1133,6 +1137,10 @@ async function analyzeFileWithBackendIA(filePath, mimeType = '', originalName = 
         endpoint: fileEndpoint,
         jobId: directResponse.data.job_id
       });
+      // Registrar jobId para que cancel-queue-item pueda cancelarlo en el backend
+      if (queueId) {
+        activeJobsByQueueId.set(queueId, { jobId: directResponse.data.job_id });
+      }
       const jobResult = await pollJobResult(directResponse.data.job_id);
       mainLog('info', 'analyzeFileWithBackendIA:job-done', {
         jobId: directResponse.data.job_id,
@@ -1354,17 +1362,27 @@ async function pollJobResult(jobId, options = {}) {
         return job.result;
       }
 
+      if (job.status === 'cancelled') {
+        mainLog('info', 'pollJobResult:cancelled', { jobId });
+        const cancelErr = new Error(job.error || 'Cancelado por el usuario');
+        cancelErr.cancelled = true;
+        throw cancelErr;
+      }
+
       if (job.status === 'error') {
         mainLog('error', 'pollJobResult:job-error', { jobId, error: job.error });
-        throw new Error(job.error || `El job ${jobId} terminó con error`);
+        const jobErr = new Error(job.error || `El job ${jobId} terminó con error`);
+        jobErr.jobError = true;
+        throw jobErr;
       }
 
       // status === 'pending' | 'processing' → seguir esperando
       mainLog('info', 'pollJobResult:waiting', { jobId, status: job.status, attempt });
     } catch (error) {
-      // Si el error es del propio job (lo lanzamos arriba), propagar
+      // Errores del propio job (cancelado/fallido): propagar inmediatamente sin reintentar
+      if (error.cancelled || error.jobError) throw error;
+      // Error de red transitorio — reintentar
       if (error.message && !error.response) {
-        // Error de red transitorio — reintentar
         mainLog('warn', 'pollJobResult:network-error', {
           jobId,
           attempt,
@@ -1448,17 +1466,37 @@ async function analyzeFilesWithBackendIABatch(items = [], docType = 'albaran') {
 
   const results = [];
   for (const item of validItems) {
+    const queueId = item.queueId || null;
+
+    // Comprobar cancelación ANTES de enviar el archivo a la IA
+    if (queueId && pendingCancellations.has(queueId)) {
+      mainLog('info', 'analyzeFilesWithBackendIABatch:cancelled-before-submit', { queueId });
+      pendingCancellations.delete(queueId);
+      results.push({ success: false, cancelled: true, analysis: '', error: 'Cancelado por el usuario' });
+      continue;
+    }
+
     try {
       const single = await analyzeFileWithBackendIA(
         item.filePath,
         item.mimeType || '',
         item.originalName || '',
         docType,
-        item.postProcess || null
+        item.postProcess || null,
+        queueId
       );
       results.push({ success: true, analysis: single?.analysis || '', raw: single });
     } catch (error) {
-      results.push({ success: false, analysis: '', error: error.message || String(error) });
+      if (error.cancelled) {
+        results.push({ success: false, cancelled: true, analysis: '', error: 'Cancelado por el usuario' });
+      } else {
+        results.push({ success: false, analysis: '', error: error.message || String(error) });
+      }
+    } finally {
+      if (queueId) {
+        pendingCancellations.delete(queueId);
+        activeJobsByQueueId.delete(queueId);
+      }
     }
   }
   return results;
@@ -2535,6 +2573,31 @@ ipcMain.handle('analyze-document', async (event, filePath, mimeType, originalNam
   }
 });
 
+// Señal de cancelación desde el renderer: NO usa ipcMain.handle para no bloquear el renderer
+ipcMain.on('cancel-queue-item', async (event, queueId) => {
+  if (!queueId) return;
+  pendingCancellations.add(queueId);
+  mainLog('info', 'cancel-queue-item:received', { queueId });
+
+  const info = activeJobsByQueueId.get(queueId);
+  if (info?.jobId) {
+    try {
+      const sessionId = store.get('sessionId');
+      if (sessionId) {
+        await axios.post(`${BACKEND_URL}/job/${info.jobId}/cancel`, { sessionId }, { timeout: 10000 });
+        mainLog('info', 'cancel-queue-item:backend-cancelled', { queueId, jobId: info.jobId });
+      }
+    } catch (err) {
+      mainLog('error', 'cancel-queue-item:backend-cancel-error', {
+        queueId,
+        jobId: info.jobId,
+        error: err?.message || String(err)
+      });
+    }
+    activeJobsByQueueId.delete(queueId);
+  }
+});
+
 // Alias de compatibilidad: algunos flujos llaman a 'analyze-file'
 // Mantiene compatibilidad incluso si el backend aún no expone /analyze/document/*/file.
 ipcMain.handle('analyze-file', async (event, filePath, mimeType = '', originalName = '', docType = 'albaran', postProcess = null) => {
@@ -2613,6 +2676,25 @@ ipcMain.handle('send-email', async (event, payload) => {
   }
 });
 
+
+// Eliminar archivo de Drive por ID (limpia archivos cuyo proceso fue cancelado antes de finalizar)
+ipcMain.handle('delete-drive-file', async (event, fileId) => {
+  const sessionId = store.get('sessionId');
+  if (!sessionId || !fileId) {
+    return { success: false, error: 'sessionId o fileId requerido' };
+  }
+  try {
+    const response = await postWithRetry(`${BACKEND_URL}/drive/delete-file`, { sessionId, fileId }, {
+      timeout: DEFAULT_TIMEOUT_MS,
+      retries: 0
+    });
+    mainLog('info', 'delete-drive-file:ok', { fileId });
+    return response.data;
+  } catch (error) {
+    mainLog('error', 'delete-drive-file:error', { fileId, error: serializeError(error) });
+    return { success: false, error: error?.message };
+  }
+});
 
 // Mover archivo en Drive (agregar/quitar padres)
 ipcMain.handle('move-file', async (event, fileId, addParents = [], removeParents = []) => {
