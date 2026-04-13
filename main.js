@@ -268,6 +268,9 @@ function normalizeAlbaranNumberForMatch(value) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    // Tolerar prefijos habituales en algunas facturas/albaranes.
+    // Ejemplos equivalentes: "AB/X", "AL AB/X", "ALBARAN AB/X", "ALB-AB/X".
+    .replace(/^(?:(?:albaran(?:es)?|alb|al)(?:n[ouº°.]*)?[\s._\-/:#]*)+/i, '')
     .replace(/[^a-z0-9]/g, '');
 }
 
