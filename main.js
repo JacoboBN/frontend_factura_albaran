@@ -655,7 +655,7 @@ function buildIANotesEmailLines(analysisText) {
   ];
 }
 
-function buildAlbaranTotalsComparisonLines(compareResult = {}) {
+function buildAlbaranTotalsComparisonLines(compareResult = {}, facturaFileName = '') {
   const rows = Array.isArray(compareResult?.albaranTotalsComparison)
     ? compareResult.albaranTotalsComparison
     : [];
@@ -668,17 +668,19 @@ function buildAlbaranTotalsComparisonLines(compareResult = {}) {
     const num = row?.albaranNum || 'N/A';
     const totalFactura = formatAmountEuro(row?.totalFactura);
     const totalDetectado = formatAmountEuro(row?.totalAlbaranDetectado);
-    return `- Albarán ${num}: factura=${totalFactura} | detectado=${totalDetectado}`;
+    const albaranSource = row?.albaranSourceFileName || 'No disponible';
+    const facturaSource = facturaFileName || 'No disponible';
+    return `- Albarán ${num}: total_albarán=${totalDetectado} (archivo_albarán=${albaranSource}) | total_factura=${totalFactura} (archivo_factura=${facturaSource})`;
   });
 }
 
 function formatAlbaranTotalComparisonLineHtml(line = '') {
   const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
-  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*factura=(.+?)\s*\|\s*detectado=(.+)$/i);
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*total_albar[aá]n=(.+?)\s*\(archivo_albar[aá]n=(.+?)\)\s*\|\s*total_factura=(.+?)\s*\(archivo_factura=(.+?)\)$/i);
   if (!match) return escapeHtml(cleaned);
 
-  const [, num, totalFactura, totalDetectado] = match;
-  return `Albarán <strong>${escapeHtml(num)}</strong>: factura=<strong>${escapeHtml(totalFactura)}</strong> | detectado=<strong>${escapeHtml(totalDetectado)}</strong>`;
+  const [, num, totalDetectado, albaranSource, totalFactura, facturaSource] = match;
+  return `Albarán <strong>${escapeHtml(num)}</strong>: total albarán=<strong>${escapeHtml(totalDetectado)}</strong> (<strong>${escapeHtml(albaranSource)}</strong>) | total factura=<strong>${escapeHtml(totalFactura)}</strong> (<strong>${escapeHtml(facturaSource)}</strong>)`;
 }
 
 function getComparedAlbaranesLabel(compareResult = {}) {
@@ -815,7 +817,7 @@ function buildComparisonEmailPayload({
 } = {}) {
   const incongruentAlbaranLinks = buildIncongruentAlbaranesLinks(compareResult);
   const congruentAlbaranSummary = buildCongruentAlbaranesSummary(compareResult);
-  const totalsByAlbaranLines = buildAlbaranTotalsComparisonLines(compareResult);
+  const totalsByAlbaranLines = buildAlbaranTotalsComparisonLines(compareResult, fileName || '');
   const compareMessage = addEuroSymbolToAmounts(compareResult.message || 'Se encontraron incongruencias.');
 
   const htmlIncongruentLinks = toHtmlList(
@@ -850,7 +852,7 @@ function buildComparisonEmailPayload({
         `Total factura: ${facturaTotalLabel}`,
         `Total albaranes: ${albaranesTotalLabel}`,
         '',
-        '=== TOTALES POR ALBARÁN (FACTURA vs DETECTADO) ===',
+        '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
         ...totalsByAlbaranLines,
         '',
         '=== FACTURA ORIGINAL ===',
@@ -885,7 +887,7 @@ function buildComparisonEmailPayload({
             <p style="margin:0;">${facturaDriveLink ? `<a href="${escapeHtml(facturaDriveLink)}">Abrir factura en Drive</a>` : 'No disponible'}</p>
           </div>
 
-          <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (factura vs detectado)</h3>
+          <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (con archivos origen)</h3>
           <ul style="margin-top:0;">${htmlTotalsByAlbaran}</ul>
 
           <hr style="border:none; border-top:1px solid #eceff3; margin:16px 0;" />
@@ -917,7 +919,7 @@ function buildComparisonEmailPayload({
       `Total factura: ${facturaTotalLabel}`,
       `Total albaranes: ${albaranesTotalLabel}`,
       '',
-      '=== TOTALES POR ALBARÁN (FACTURA vs DETECTADO) ===',
+      '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
       ...totalsByAlbaranLines,
       '',
       '=== ALBARANES CORRECTOS (número y nombre) ===',
@@ -941,7 +943,7 @@ function buildComparisonEmailPayload({
         <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
         <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
 
-        <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (factura vs detectado)</h3>
+        <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (con archivos origen)</h3>
         <ul style="margin-top:0;">${htmlTotalsByAlbaran}</ul>
 
         ${htmlIaNotes}
@@ -3556,7 +3558,8 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     albaranTotalsComparison.push({
       albaranNum,
       totalFactura: facturaTotalForAlbaran,
-      totalAlbaranDetectado: totalDetected
+      totalAlbaranDetectado: totalDetected,
+      albaranSourceFileName: sourceFile?.name || sourceFileName || null
     });
 
     albaranDocsByNum.set(albaranNum, {

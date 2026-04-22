@@ -506,6 +506,12 @@ async function comparePendingFacturasIfReady() {
       const albaranesLabel = getComparedAlbaranesLabel(compareResult);
       const facturaTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.facturaTotal));
       const albaranesTotalLabel = formatAmountEuro(parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes));
+      const totalsByAlbaranLines = buildAlbaranTotalsComparisonLines(compareResult, item?.fileName || '');
+      const htmlTotalsByAlbaran = toHtmlList(
+        totalsByAlbaranLines,
+        formatAlbaranTotalComparisonLineHtml,
+        'No disponible'
+      );
 
       await ipcRenderer.invoke('send-email', {
         to: recipientEmail,
@@ -514,9 +520,13 @@ async function comparePendingFacturasIfReady() {
           : `⚠️ ${item?.fileName || 'Factura'} con incongruencias (${facturaRef})`,
         text: [
           `Factura: ${facturaRef}`,
+          `Nombre archivo factura: ${item?.fileName || 'N/A'}`,
           `Albaranes comparados: ${albaranesLabel}`,
           `Total factura: ${facturaTotalLabel}`,
           `Total albaranes: ${albaranesTotalLabel}`,
+          '',
+          '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
+          ...totalsByAlbaranLines,
           compareResult?.message || 'Comparación completada.'
         ].join('\n'),
         html: `
@@ -527,10 +537,14 @@ async function comparePendingFacturasIfReady() {
 
             <div style="background:${compareResult?.ok ? '#f6fbf8' : '#f8f9fb'}; border:1px solid ${compareResult?.ok ? '#dcefe3' : '#e6e9ef'}; border-radius:8px; padding:12px; margin-bottom:12px;">
               <p style="margin:0 0 6px;"><strong>Factura:</strong> <strong>${escapeHtml(facturaRef)}</strong></p>
+              <p style="margin:0 0 6px;"><strong>Nombre archivo factura:</strong> <strong>${escapeHtml(item?.fileName || 'N/A')}</strong></p>
               <p style="margin:0 0 6px;"><strong>Albaranes comparados:</strong> <strong>${escapeHtml(albaranesLabel)}</strong></p>
               <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
               <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
             </div>
+
+            <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (con archivos origen)</h3>
+            <ul style="margin-top:0;">${htmlTotalsByAlbaran}</ul>
 
             <div style="margin: 14px 0;">
               <h3 style="margin:0 0 8px; font-size:15px;">📌 Resumen</h3>
@@ -1279,6 +1293,34 @@ function buildExtractionWarningsEmailLines(analysisText) {
   ];
 }
 
+function buildAlbaranTotalsComparisonLines(compareResult = {}, facturaFileName = '') {
+  const rows = Array.isArray(compareResult?.albaranTotalsComparison)
+    ? compareResult.albaranTotalsComparison
+    : [];
+
+  if (!rows.length) {
+    return ['- No disponible'];
+  }
+
+  return rows.map((row) => {
+    const num = row?.albaranNum || 'N/A';
+    const totalFactura = formatAmountEuro(row?.totalFactura);
+    const totalDetectado = formatAmountEuro(row?.totalAlbaranDetectado);
+    const albaranSource = row?.albaranSourceFileName || 'No disponible';
+    const facturaSource = facturaFileName || 'No disponible';
+    return `- Albarán ${num}: total_albarán=${totalDetectado} (archivo_albarán=${albaranSource}) | total_factura=${totalFactura} (archivo_factura=${facturaSource})`;
+  });
+}
+
+function formatAlbaranTotalComparisonLineHtml(line = '') {
+  const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*total_albar[aá]n=(.+?)\s*\(archivo_albar[aá]n=(.+?)\)\s*\|\s*total_factura=(.+?)\s*\(archivo_factura=(.+?)\)$/i);
+  if (!match) return escapeHtml(cleaned);
+
+  const [, num, totalDetectado, albaranSource, totalFactura, facturaSource] = match;
+  return `Albarán <strong>${escapeHtml(num)}</strong>: total albarán=<strong>${escapeHtml(totalDetectado)}</strong> (<strong>${escapeHtml(albaranSource)}</strong>) | total factura=<strong>${escapeHtml(totalFactura)}</strong> (<strong>${escapeHtml(facturaSource)}</strong>)`;
+}
+
 function getComparedAlbaranesLabel(compareResult = {}) {
   const fromExpected = Array.isArray(compareResult?.expectedAlbaranes)
     ? compareResult.expectedAlbaranes
@@ -1884,6 +1926,12 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                 const albaranesTotalValue = parseComparableNumber(compareResult?.sumatoriaTotalesAlbaranes);
                 const facturaTotalLabel = formatAmountEuro(facturaTotalValue);
                 const albaranesTotalLabel = formatAmountEuro(albaranesTotalValue);
+                const totalsByAlbaranLines = buildAlbaranTotalsComparisonLines(compareResult, item.fileName || '');
+                const htmlTotalsByAlbaran = toHtmlList(
+                  totalsByAlbaranLines,
+                  formatAlbaranTotalComparisonLineHtml,
+                  'No disponible'
+                );
 
                 if (compareResult && !compareResult.ok) {
                   try {
@@ -1920,6 +1968,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         `Total factura: ${facturaTotalLabel}`,
                         `Total albaranes: ${albaranesTotalLabel}`,
                         '',
+                        '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
+                        ...totalsByAlbaranLines,
+                        '',
                         '=== FACTURA ORIGINAL ===',
                         `Link factura original: ${facturaDriveLink || 'No disponible'}`,
                         '',
@@ -1945,6 +1996,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                             <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
                             <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
                           </div>
+
+                          <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (con archivos origen)</h3>
+                          <ul style="margin-top:0;">${htmlTotalsByAlbaran}</ul>
 
                           <div style="margin: 14px 0;">
                             <h3 style="margin:0 0 8px; font-size:15px;">📄 Factura original</h3>
@@ -1994,6 +2048,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
                         `Total factura: ${facturaTotalLabel}`,
                         `Total albaranes: ${albaranesTotalLabel}`,
                         '',
+                        '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
+                        ...totalsByAlbaranLines,
+                        '',
                         '=== ALBARANES CORRECTOS (número y nombre) ===',
                         'Albaranes correctos (número y nombre guardado):',
                         ...congruentAlbaranSummary,
@@ -2013,6 +2070,9 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
 
                           <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
                           <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
+
+                          <h3 style="margin:14px 0 8px; font-size:15px;">📊 Totales por albarán (con archivos origen)</h3>
+                          <ul style="margin-top:0;">${htmlTotalsByAlbaran}</ul>
 
                           <p style="margin-top:12px;"><em>Se han comparado correctamente y todo bien.</em></p>
                         </div>
