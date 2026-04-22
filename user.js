@@ -1304,21 +1304,23 @@ function buildAlbaranTotalsComparisonLines(compareResult = {}, facturaFileName =
 
   return rows.map((row) => {
     const num = row?.albaranNum || 'N/A';
-    const totalFactura = formatAmountEuro(row?.totalFactura);
-    const totalDetectado = formatAmountEuro(row?.totalAlbaranDetectado);
+    const totalFacturaSinIva = formatAmountEuro(row?.totalFacturaSinIva);
+    const totalFacturaConIva = formatAmountEuro(row?.totalFacturaConIva);
+    const totalDetectadoSinIva = formatAmountEuro(row?.totalAlbaranDetectadoSinIva);
+    const totalDetectadoConIva = formatAmountEuro(row?.totalAlbaranDetectadoConIva);
     const albaranSource = row?.albaranSourceFileName || 'No disponible';
     const facturaSource = facturaFileName || 'No disponible';
-    return `- Albarán ${num}: total_albarán=${totalDetectado} (archivo_albarán=${albaranSource}) | total_factura=${totalFactura} (archivo_factura=${facturaSource})`;
+    return `- Albarán ${num}: albarán_sin_iva=${totalDetectadoSinIva} | albarán_con_iva=${totalDetectadoConIva} (archivo_albarán=${albaranSource}) | factura_sin_iva=${totalFacturaSinIva} | factura_con_iva=${totalFacturaConIva} (archivo_factura=${facturaSource})`;
   });
 }
 
 function formatAlbaranTotalComparisonLineHtml(line = '') {
   const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
-  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*total_albar[aá]n=(.+?)\s*\(archivo_albar[aá]n=(.+?)\)\s*\|\s*total_factura=(.+?)\s*\(archivo_factura=(.+?)\)$/i);
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*albar[aá]n_sin_iva=(.+?)\s*\|\s*albar[aá]n_con_iva=(.+?)\s*\(archivo_albar[aá]n=(.+?)\)\s*\|\s*factura_sin_iva=(.+?)\s*\|\s*factura_con_iva=(.+?)\s*\(archivo_factura=(.+?)\)$/i);
   if (!match) return escapeHtml(cleaned);
 
-  const [, num, totalDetectado, albaranSource, totalFactura, facturaSource] = match;
-  return `Albarán <strong>${escapeHtml(num)}</strong>: total albarán=<strong>${escapeHtml(totalDetectado)}</strong> (<strong>${escapeHtml(albaranSource)}</strong>) | total factura=<strong>${escapeHtml(totalFactura)}</strong> (<strong>${escapeHtml(facturaSource)}</strong>)`;
+  const [, num, albSinIva, albConIva, albaranSource, facSinIva, facConIva, facturaSource] = match;
+  return `Albarán <strong>${escapeHtml(num)}</strong>: albarán sin IVA=<strong>${escapeHtml(albSinIva)}</strong> | albarán con IVA=<strong>${escapeHtml(albConIva)}</strong> (<strong>${escapeHtml(albaranSource)}</strong>) | factura sin IVA=<strong>${escapeHtml(facSinIva)}</strong> | factura con IVA=<strong>${escapeHtml(facConIva)}</strong> (<strong>${escapeHtml(facturaSource)}</strong>)`;
 }
 
 function getComparedAlbaranesLabel(compareResult = {}) {

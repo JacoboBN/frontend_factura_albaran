@@ -666,21 +666,23 @@ function buildAlbaranTotalsComparisonLines(compareResult = {}, facturaFileName =
 
   return rows.map((row) => {
     const num = row?.albaranNum || 'N/A';
-    const totalFactura = formatAmountEuro(row?.totalFactura);
-    const totalDetectado = formatAmountEuro(row?.totalAlbaranDetectado);
+    const totalFacturaSinIva = formatAmountEuro(row?.totalFacturaSinIva);
+    const totalFacturaConIva = formatAmountEuro(row?.totalFacturaConIva);
+    const totalDetectadoSinIva = formatAmountEuro(row?.totalAlbaranDetectadoSinIva);
+    const totalDetectadoConIva = formatAmountEuro(row?.totalAlbaranDetectadoConIva);
     const albaranSource = row?.albaranSourceFileName || 'No disponible';
     const facturaSource = facturaFileName || 'No disponible';
-    return `- Albarán ${num}: total_albarán=${totalDetectado} (archivo_albarán=${albaranSource}) | total_factura=${totalFactura} (archivo_factura=${facturaSource})`;
+    return `- Albarán ${num}: albarán_sin_iva=${totalDetectadoSinIva} | albarán_con_iva=${totalDetectadoConIva} (archivo_albarán=${albaranSource}) | factura_sin_iva=${totalFacturaSinIva} | factura_con_iva=${totalFacturaConIva} (archivo_factura=${facturaSource})`;
   });
 }
 
 function formatAlbaranTotalComparisonLineHtml(line = '') {
   const cleaned = String(line || '').replace(/^\-\s*/, '').trim();
-  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*total_albar[aá]n=(.+?)\s*\(archivo_albar[aá]n=(.+?)\)\s*\|\s*total_factura=(.+?)\s*\(archivo_factura=(.+?)\)$/i);
+  const match = cleaned.match(/^Albar[aá]n\s+(.+?):\s*albar[aá]n_sin_iva=(.+?)\s*\|\s*albar[aá]n_con_iva=(.+?)\s*\(archivo_albar[aá]n=(.+?)\)\s*\|\s*factura_sin_iva=(.+?)\s*\|\s*factura_con_iva=(.+?)\s*\(archivo_factura=(.+?)\)$/i);
   if (!match) return escapeHtml(cleaned);
 
-  const [, num, totalDetectado, albaranSource, totalFactura, facturaSource] = match;
-  return `Albarán <strong>${escapeHtml(num)}</strong>: total albarán=<strong>${escapeHtml(totalDetectado)}</strong> (<strong>${escapeHtml(albaranSource)}</strong>) | total factura=<strong>${escapeHtml(totalFactura)}</strong> (<strong>${escapeHtml(facturaSource)}</strong>)`;
+  const [, num, albSinIva, albConIva, albaranSource, facSinIva, facConIva, facturaSource] = match;
+  return `Albarán <strong>${escapeHtml(num)}</strong>: albarán sin IVA=<strong>${escapeHtml(albSinIva)}</strong> | albarán con IVA=<strong>${escapeHtml(albConIva)}</strong> (<strong>${escapeHtml(albaranSource)}</strong>) | factura sin IVA=<strong>${escapeHtml(facSinIva)}</strong> | factura con IVA=<strong>${escapeHtml(facConIva)}</strong> (<strong>${escapeHtml(facturaSource)}</strong>)`;
 }
 
 function getComparedAlbaranesLabel(compareResult = {}) {
@@ -1061,6 +1063,39 @@ function extractTotalDetectedFromTotalTxtText(totalText = '') {
   }
 
   return null;
+}
+
+function extractTotalsDetectedFromTotalTxtText(totalText = '') {
+  const text = String(totalText || '').trim();
+  if (!text) {
+    return { total: null, totalSinIva: null };
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean);
+    if (firstLine) {
+      try {
+        parsed = JSON.parse(firstLine);
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    return {
+      total: parseComparableNumber(parsed?.total),
+      totalSinIva: parseComparableNumber(parsed?.total_sin_iva)
+    };
+  }
+
+  return {
+    total: extractTotalDetectedFromTotalTxtText(totalText),
+    totalSinIva: null
+  };
 }
 
 function addEuroSymbolToAmounts(text = '') {
@@ -3549,16 +3584,23 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
 
     const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, informesNoComparadoFiles);
     let totalDetected = null;
+    let totalDetectedSinIva = null;
     const facturaTotalForAlbaran = facturaTotalsByAlbaran.get(normalizeAlbaranNumberForMatch(albaranNum)) ?? null;
     if (totalTxt) {
       const totalText = await downloadDriveFileToString(totalTxt);
-      totalDetected = extractTotalDetectedFromTotalTxtText(totalText);
+      const extractedTotals = extractTotalsDetectedFromTotalTxtText(totalText);
+      totalDetected = extractedTotals.total;
+      totalDetectedSinIva = extractedTotals.totalSinIva;
     }
 
     albaranTotalsComparison.push({
       albaranNum,
       totalFactura: facturaTotalForAlbaran,
+      totalFacturaSinIva: facturaTotalForAlbaran,
+      totalFacturaConIva: null,
       totalAlbaranDetectado: totalDetected,
+      totalAlbaranDetectadoSinIva: totalDetectedSinIva,
+      totalAlbaranDetectadoConIva: totalDetected,
       albaranSourceFileName: sourceFile?.name || sourceFileName || null
     });
 
