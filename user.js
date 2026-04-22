@@ -961,10 +961,57 @@ function buildTxtFilesFromAnalysis(analysisText, sourceFileName = null) {
   // }
 
   if (enrichedResumen) {
-    files.push({
-      name: `Total${safeNum}${suffix}.txt`,
-      content: enrichedResumen
-    });
+    if (isFactura) {
+      files.push({
+        name: `Total${safeNum}${suffix}.txt`,
+        content: enrichedResumen
+      });
+    } else {
+      let resumenForTotals = null;
+      try {
+        resumenForTotals = JSON.parse(enrichedResumen);
+      } catch (e) {
+        resumenForTotals = null;
+      }
+
+      const resumenAlbaranes = Array.isArray(resumenForTotals?.albaranes)
+        ? resumenForTotals.albaranes
+        : [];
+
+      if (resumenAlbaranes.length) {
+        const createdNames = new Set();
+        for (const albaran of resumenAlbaranes) {
+          const rawNum = albaran?.num_albaran;
+          const safeAlbNum = sanitizeFileName(rawNum || 'SinNumero');
+          const fileName = `Total${safeAlbNum}Alb.txt`;
+          if (createdNames.has(fileName.toLowerCase())) continue;
+          createdNames.add(fileName.toLowerCase());
+
+          const resumenPorAlbaran = {
+            num_albaran: rawNum || 'NaN',
+            fecha: albaran?.fecha || 'NaN',
+            total_sin_iva: albaran?.total_sin_iva ?? 'NaN',
+            porcentaje_iva: albaran?.porcentaje_iva ?? 'NaN',
+            iva: albaran?.iva ?? 'NaN',
+            total: albaran?.total ?? 'NaN',
+            error: 'No',
+            source_file: sourceFileName || null
+          };
+
+          files.push({
+            name: fileName,
+            content: JSON.stringify(resumenPorAlbaran)
+          });
+        }
+      }
+
+      if (!files.length) {
+        files.push({
+          name: `Total${safeNum}${suffix}.txt`,
+          content: enrichedResumen
+        });
+      }
+    }
   }
 
   return { files, isFactura };
