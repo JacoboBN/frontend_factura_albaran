@@ -4,7 +4,8 @@
   "description": "DriveShare - App de escritorio",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start:prod": "electron .",
+    "start:local": "set BACKEND_URL=http://localhost:3000&& electron .",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
