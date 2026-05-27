@@ -68,11 +68,23 @@ let currentUpdaterStatus = {
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Esperando albaranes', 'Comparando', 'Comparado', 'Email'];
+const MAX_BATCH_FILES = 1;
+const PENDING_FACTURA_TTL_MS = 30 * 60 * 1000;
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
 let currentCompareMode = 'totales';
 let currentUploadOrder = 'facturas-first';
 const pendingFacturaComparisons = new Map();
+
+function cleanupPendingFacturaComparisons() {
+  const now = Date.now();
+  for (const [queueId, pending] of pendingFacturaComparisons.entries()) {
+    const createdAt = Number(pending?.createdAt || 0);
+    if (!createdAt || (now - createdAt) > PENDING_FACTURA_TTL_MS) {
+      pendingFacturaComparisons.delete(queueId);
+    }
+  }
+}
 
 function setUploadOrder(mode = 'facturas-first') {
   // Flujo unificado solicitado: siempre facturas primero.
@@ -418,6 +430,7 @@ async function sendMissingAlbaranesAlertForPendingFactura({
 }
 
 async function comparePendingFacturasIfReady() {
+  cleanupPendingFacturaComparisons();
   const pendingEntries = Array.from(pendingFacturaComparisons.entries());
   if (!pendingEntries.length) return;
 
@@ -569,6 +582,7 @@ async function comparePendingFacturasIfReady() {
       showStatus(`Factura ${item?.fileName || ''} comparada correctamente.`, 'success');
     } catch (error) {
       markQueueError(queueId, error?.message || 'Error al comparar factura pendiente');
+      pendingFacturaComparisons.delete(queueId);
       showStatus(`Error al comparar factura pendiente: ${error?.message || error}`, 'error');
     }
   }
@@ -825,6 +839,27 @@ async function invokeAnalyzeFilesBatchWithFallback(items = [], docType = 'albara
     docType,
     items: validItems.length
   });
+
+  const normalizedBatchSize = Math.max(1, Number(MAX_BATCH_FILES) || 1);
+
+  if (normalizedBatchSize <= 1) {
+    const sequentialResults = [];
+    for (const item of validItems) {
+      try {
+        const single = await invokeAnalyzeFileWithFallback(
+          item.filePath,
+          item.mimeType || '',
+          item.originalName || '',
+          docType,
+          item.postProcess || null
+        );
+        sequentialResults.push({ success: true, analysis: single?.analysis || '', raw: single });
+      } catch (singleError) {
+        sequentialResults.push({ success: false, analysis: '', error: singleError?.message || String(singleError) });
+      }
+    }
+    return sequentialResults;
+  }
 
   try {
     const results = await ipcRenderer.invoke('analyze-files-batch', validItems, docType);
@@ -1883,6 +1918,7 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
               try {
                 if (currentUploadOrder === 'facturas-first') {
                   pendingFacturaComparisons.set(item.queueId, {
+                    createdAt: Date.now(),
                     item: {
                       queueId: item.queueId,
                       fileName: item.fileName,
