@@ -658,6 +658,58 @@ function uiLog(level = 'log', message = '', data = undefined) {
 
 function classifyBackendError(input = '') {
   const text = String(input || '').toLowerCase();
+  const hasUploadSizeIssue = (
+    text.includes('file too large')
+    || text.includes('multererror')
+    || text.includes('límite de tamaño')
+    || text.includes('limite de tamaño')
+    || text.includes('size limit')
+    || text.includes('payload too large')
+    || text.includes('413')
+  );
+
+  if (hasUploadSizeIssue) {
+    return {
+      title: 'Archivo demasiado grande para subir',
+      help: 'La subida se bloqueó por tamaño del archivo.\n\nQué hacer:\n1) Comprime el PDF o divídelo.\n2) Si debe admitirse, pide aumentar el límite del backend.\n3) Vuelve a intentar la subida.'
+    };
+  }
+
+  const hasPagesLimitIssue = (
+    text.includes('max_pdf_pages')
+    || text.includes('límite de páginas')
+    || text.includes('limite de paginas')
+    || text.includes('too many pages')
+    || text.includes('demasiadas páginas')
+    || text.includes('demasiadas paginas')
+  );
+
+  if (hasPagesLimitIssue) {
+    return {
+      title: 'El PDF supera el límite de páginas configurado',
+      help: 'El documento tiene más páginas de las permitidas para procesado completo.\n\nQué hacer:\n1) Divide el PDF en partes.\n2) Sube solo el tramo necesario.\n3) Si corresponde, pide ampliar el límite de páginas en backend.'
+    };
+  }
+
+  const hasReadOrExtractionIssue = (
+    text.includes('error al analizar archivo')
+    || text.includes('openai api returned empty response')
+    || text.includes('batch ia sin resultados')
+    || text.includes('no se pudieron construir los ficheros .txt')
+    || text.includes('txt')
+    || text.includes('empty')
+    || text.includes('vacío')
+    || text.includes('vacio')
+    || text.includes('nan')
+  );
+
+  if (hasReadOrExtractionIssue) {
+    return {
+      title: 'No se pudo leer correctamente el albarán/factura',
+      help: 'La IA no pudo extraer datos válidos (por ejemplo, TXT vacío o sin contenido útil).\n\nQué hacer:\n1) Revisa que el PDF esté legible (no borroso/cortado).\n2) Prueba con otra versión del archivo (escaneo más nítido).\n3) Si persiste, envía el archivo de ejemplo para ajustar el parser.'
+    };
+  }
+
   const hasBackendConnectivityIssue = (
     text.includes('network error')
     || text.includes('econnrefused')
@@ -711,7 +763,10 @@ function classifyBackendError(input = '') {
     };
   }
 
-  return null;
+  return {
+    title: 'Error durante la subida o el análisis',
+    help: 'Ha ocurrido un error no clasificado automáticamente.\n\nQué hacer:\n1) Intenta de nuevo.\n2) Si se repite, guarda captura del mensaje y avisa a soporte para revisar logs.'
+  };
 }
 
 function showBackendAlert(message = '', details = '') {
@@ -3197,6 +3252,7 @@ function markQueueError(id, message) {
   item.error = message || 'Error';
   uploadQueue.set(id, item);
   selectedQueueIds.delete(id);
+  showBackendAlert(item.error, 'queue-error');
   renderQueue();
 }
 
