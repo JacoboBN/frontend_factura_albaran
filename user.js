@@ -990,6 +990,111 @@ function extractAnalysisSections(analysisText) {
   };
 }
 
+function isNaNLikeValue(value) {
+  if (value === null || value === undefined) return true;
+  const text = String(value).trim().toLowerCase();
+  return !text || text === 'nan' || text === 'null' || text === 'undefined' || text === '-';
+}
+
+function toComparableNumberSafe(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim().replace(',', '.');
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+function detectUnreadableAnalysisReason(analysisText = '') {
+  const sections = extractAnalysisSections(analysisText);
+  if (!sections) {
+    return 'No se pudo interpretar el formato del análisis generado.';
+  }
+
+  const resumenLine = (sections.resumenRaw || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean);
+
+  if (!resumenLine) {
+    return 'El análisis no devolvió resumen (resultado vacío).';
+  }
+
+  let resumenObj = null;
+  try {
+    resumenObj = JSON.parse(resumenLine);
+  } catch {
+    return 'El análisis devolvió un resumen inválido.';
+  }
+
+  const total = toComparableNumberSafe(resumenObj?.total);
+  const totalSinIva = toComparableNumberSafe(resumenObj?.total_sin_iva);
+
+  const allMainTotalsMissing = (
+    isNaNLikeValue(resumenObj?.total)
+    && isNaNLikeValue(resumenObj?.total_sin_iva)
+    && isNaNLikeValue(resumenObj?.iva)
+  );
+
+  const allMainTotalsZero = (
+    total !== null
+    && totalSinIva !== null
+    && Math.abs(total) < 1e-9
+    && Math.abs(totalSinIva) < 1e-9
+  );
+
+  if (allMainTotalsMissing) {
+    return 'No se pudieron extraer importes/totales (todo NaN o vacío).';
+  }
+
+  if (allMainTotalsZero) {
+    return 'Los totales detectados son 0, posible lectura ilegible del documento.';
+  }
+
+  const articuloLines = (sections.articulosRaw || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if (!articuloLines.length) {
+    return 'No se detectaron líneas de artículos en el documento.';
+  }
+
+  let parsedArticles = 0;
+  let allArticlesEmpty = true;
+  for (const line of articuloLines) {
+    try {
+      const row = JSON.parse(line);
+      parsedArticles += 1;
+      const candidateFields = [
+        row?.articulo,
+        row?.kg,
+        row?.importe,
+        row?.precio,
+        row?.unidades,
+        row?.num_albaran,
+        row?.num_factura
+      ];
+      const hasSomeData = candidateFields.some(v => !isNaNLikeValue(v));
+      if (hasSomeData) {
+        allArticlesEmpty = false;
+        break;
+      }
+    } catch {
+      // ignorar línea no JSON
+    }
+  }
+
+  if (!parsedArticles) {
+    return 'No se pudo parsear ninguna línea de artículos del análisis.';
+  }
+
+  if (allArticlesEmpty) {
+    return 'Las líneas detectadas no contienen datos útiles (todo NaN/vacío).';
+  }
+
+  return null;
+}
+
 function appendSourceToJsonLines(text, sourceFileName) {
   if (!text) return text;
   const lines = text.split(/\r?\n/);
@@ -3249,7 +3354,10 @@ function markQueueError(id, message) {
   const item = uploadQueue.get(id);
   if (!item) return;
   item.status = 'Error';
-  item.error = message || 'Error';
+  const baseMessage = message || 'Error';
+  item.error = item?.fileName
+    ? `${item.fileName}: ${baseMessage}`
+    : baseMessage;
   uploadQueue.set(id, item);
   selectedQueueIds.delete(id);
   showBackendAlert(item.error, 'queue-error');
