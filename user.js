@@ -692,7 +692,10 @@ function classifyBackendError(input = '') {
   }
 
   const hasReadOrExtractionIssue = (
-    text.includes('error al analizar archivo')
+    text.includes('readability_failure')
+    || text.includes('num_albaran en nan tras reintento de calidad')
+    || text.includes('num_factura en nan tras reintento de calidad')
+    || text.includes('error al analizar archivo')
     || text.includes('openai api returned empty response')
     || text.includes('batch ia sin resultados')
     || text.includes('no se pudieron construir los ficheros .txt')
@@ -706,7 +709,7 @@ function classifyBackendError(input = '') {
   if (hasReadOrExtractionIssue) {
     return {
       title: 'No se pudo leer correctamente el albarán/factura',
-      help: 'La IA no pudo extraer datos válidos (por ejemplo, TXT vacío o sin contenido útil).\n\nQué hacer:\n1) Revisa que el PDF esté legible (no borroso/cortado).\n2) Prueba con otra versión del archivo (escaneo más nítido).\n3) Si persiste, envía el archivo de ejemplo para ajustar el parser.'
+      help: 'La IA no pudo detectar el identificador principal del documento (num_albarán o num_factura): salió NaN, incluso tras reintento automático con calidad alternativa.\n\nQué hacer:\n1) Revisa que el PDF esté legible (no borroso/cortado).\n2) Prueba con otra versión del archivo (escaneo más nítido, mejor contraste).\n3) Si persiste, envía el archivo de ejemplo para ajustar el parser.'
     };
   }
 
