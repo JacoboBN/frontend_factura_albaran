@@ -692,7 +692,9 @@ function classifyBackendError(input = '') {
   }
 
   const hasReadOrExtractionIssue = (
-    text.includes('readability_failure')
+    text.includes('documento_ilegible')
+    || text.includes('pdf_render_font_failure')
+    || text.includes('readability_failure')
     || text.includes('num_albaran en nan tras reintento de calidad')
     || text.includes('num_factura en nan tras reintento de calidad')
     || text.includes('error al analizar archivo')
@@ -708,10 +710,16 @@ function classifyBackendError(input = '') {
 
   if (hasReadOrExtractionIssue) {
     return {
-      title: 'No se pudo leer correctamente el albarán/factura',
-      help: 'La IA no pudo detectar el identificador principal del documento (num_albarán o num_factura): salió NaN, incluso tras reintento automático con calidad alternativa.\n\nQué hacer:\n1) Revisa que el PDF esté legible (no borroso/cortado).\n2) Prueba con otra versión del archivo (escaneo más nítido, mejor contraste).\n3) Si persiste, envía el archivo de ejemplo para ajustar el parser.'
+      title: 'DOCUMENTO ILEGIBLE',
+      help: 'No se pudo leer el contenido del PDF de forma fiable (posible corrupción de tipografías/render).\n\nQué hacer:\n1) Intenta con otra exportación del PDF (o imprimir a PDF).\n2) Evita escaneos borrosos o comprimidos en exceso.\n3) Si persiste, envía el ejemplo para ajustar el render del backend.'
     };
   }
+
+  // Bloque anterior conservado como referencia:
+  // return {
+  //   title: 'No se pudo leer correctamente el albarán/factura',
+  //   help: 'La IA no pudo detectar el identificador principal del documento (num_albarán o num_factura): salió NaN, incluso tras reintento automático con calidad alternativa.\n\nQué hacer:\n1) Revisa que el PDF esté legible (no borroso/cortado).\n2) Prueba con otra versión del archivo (escaneo más nítido, mejor contraste).\n3) Si persiste, envía el archivo de ejemplo para ajustar el parser.'
+  // };
 
   const hasBackendConnectivityIssue = (
     text.includes('network error')
