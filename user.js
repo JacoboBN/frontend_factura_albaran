@@ -68,23 +68,11 @@ let currentUpdaterStatus = {
 
 const DEFAULT_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Moviendo', 'Movido'];
 const FACTURA_QUEUE_STEPS = ['Esperando', 'Subiendo', 'IA', 'Esperando albaranes', 'Comparando', 'Comparado', 'Email'];
-const MAX_BATCH_FILES = 1;
-const PENDING_FACTURA_TTL_MS = 30 * 60 * 1000;
 let currentUploadTargetFolder = null;
 let uploadFlowTail = Promise.resolve();
 let currentCompareMode = 'totales';
 let currentUploadOrder = 'facturas-first';
 const pendingFacturaComparisons = new Map();
-
-function cleanupPendingFacturaComparisons() {
-  const now = Date.now();
-  for (const [queueId, pending] of pendingFacturaComparisons.entries()) {
-    const createdAt = Number(pending?.createdAt || 0);
-    if (!createdAt || (now - createdAt) > PENDING_FACTURA_TTL_MS) {
-      pendingFacturaComparisons.delete(queueId);
-    }
-  }
-}
 
 function setUploadOrder(mode = 'facturas-first') {
   // Flujo unificado solicitado: siempre facturas primero.
@@ -430,7 +418,6 @@ async function sendMissingAlbaranesAlertForPendingFactura({
 }
 
 async function comparePendingFacturasIfReady() {
-  cleanupPendingFacturaComparisons();
   const pendingEntries = Array.from(pendingFacturaComparisons.entries());
   if (!pendingEntries.length) return;
 
@@ -582,7 +569,6 @@ async function comparePendingFacturasIfReady() {
       showStatus(`Factura ${item?.fileName || ''} comparada correctamente.`, 'success');
     } catch (error) {
       markQueueError(queueId, error?.message || 'Error al comparar factura pendiente');
-      pendingFacturaComparisons.delete(queueId);
       showStatus(`Error al comparar factura pendiente: ${error?.message || error}`, 'error');
     }
   }
@@ -658,69 +644,6 @@ function uiLog(level = 'log', message = '', data = undefined) {
 
 function classifyBackendError(input = '') {
   const text = String(input || '').toLowerCase();
-  const hasUploadSizeIssue = (
-    text.includes('file too large')
-    || text.includes('multererror')
-    || text.includes('límite de tamaño')
-    || text.includes('limite de tamaño')
-    || text.includes('size limit')
-    || text.includes('payload too large')
-    || text.includes('413')
-  );
-
-  if (hasUploadSizeIssue) {
-    return {
-      title: 'Archivo demasiado grande para subir',
-      help: 'La subida se bloqueó por tamaño del archivo.\n\nQué hacer:\n1) Comprime el PDF o divídelo.\n2) Si debe admitirse, pide aumentar el límite del backend.\n3) Vuelve a intentar la subida.'
-    };
-  }
-
-  const hasPagesLimitIssue = (
-    text.includes('max_pdf_pages')
-    || text.includes('límite de páginas')
-    || text.includes('limite de paginas')
-    || text.includes('too many pages')
-    || text.includes('demasiadas páginas')
-    || text.includes('demasiadas paginas')
-  );
-
-  if (hasPagesLimitIssue) {
-    return {
-      title: 'El PDF supera el límite de páginas configurado',
-      help: 'El documento tiene más páginas de las permitidas para procesado completo.\n\nQué hacer:\n1) Divide el PDF en partes.\n2) Sube solo el tramo necesario.\n3) Si corresponde, pide ampliar el límite de páginas en backend.'
-    };
-  }
-
-  const hasReadOrExtractionIssue = (
-    text.includes('documento_ilegible')
-    || text.includes('pdf_render_font_failure')
-    || text.includes('readability_failure')
-    || text.includes('num_albaran en nan tras reintento de calidad')
-    || text.includes('num_factura en nan tras reintento de calidad')
-    || text.includes('error al analizar archivo')
-    || text.includes('openai api returned empty response')
-    || text.includes('batch ia sin resultados')
-    || text.includes('no se pudieron construir los ficheros .txt')
-    || text.includes('txt')
-    || text.includes('empty')
-    || text.includes('vacío')
-    || text.includes('vacio')
-    || text.includes('nan')
-  );
-
-  if (hasReadOrExtractionIssue) {
-    return {
-      title: 'DOCUMENTO ILEGIBLE',
-      help: 'No se pudo leer el contenido del PDF de forma fiable (posible corrupción de tipografías/render).\n\nQué hacer:\n1) Intenta con otra exportación del PDF (o imprimir a PDF).\n2) Evita escaneos borrosos o comprimidos en exceso.\n3) Si persiste, envía el ejemplo para ajustar el render del backend.'
-    };
-  }
-
-  // Bloque anterior conservado como referencia:
-  // return {
-  //   title: 'No se pudo leer correctamente el albarán/factura',
-  //   help: 'La IA no pudo detectar el identificador principal del documento (num_albarán o num_factura): salió NaN, incluso tras reintento automático con calidad alternativa.\n\nQué hacer:\n1) Revisa que el PDF esté legible (no borroso/cortado).\n2) Prueba con otra versión del archivo (escaneo más nítido, mejor contraste).\n3) Si persiste, envía el archivo de ejemplo para ajustar el parser.'
-  // };
-
   const hasBackendConnectivityIssue = (
     text.includes('network error')
     || text.includes('econnrefused')
@@ -774,10 +697,7 @@ function classifyBackendError(input = '') {
     };
   }
 
-  return {
-    title: 'Error durante la subida o el análisis',
-    help: 'Ha ocurrido un error no clasificado automáticamente.\n\nQué hacer:\n1) Intenta de nuevo.\n2) Si se repite, guarda captura del mensaje y avisa a soporte para revisar logs.'
-  };
+  return null;
 }
 
 function showBackendAlert(message = '', details = '') {
@@ -906,27 +826,6 @@ async function invokeAnalyzeFilesBatchWithFallback(items = [], docType = 'albara
     items: validItems.length
   });
 
-  const normalizedBatchSize = Math.max(1, Number(MAX_BATCH_FILES) || 1);
-
-  if (normalizedBatchSize <= 1) {
-    const sequentialResults = [];
-    for (const item of validItems) {
-      try {
-        const single = await invokeAnalyzeFileWithFallback(
-          item.filePath,
-          item.mimeType || '',
-          item.originalName || '',
-          docType,
-          item.postProcess || null
-        );
-        sequentialResults.push({ success: true, analysis: single?.analysis || '', raw: single });
-      } catch (singleError) {
-        sequentialResults.push({ success: false, analysis: '', error: singleError?.message || String(singleError) });
-      }
-    }
-    return sequentialResults;
-  }
-
   try {
     const results = await ipcRenderer.invoke('analyze-files-batch', validItems, docType);
     if (Array.isArray(results) && results.length) {
@@ -999,111 +898,6 @@ function extractAnalysisSections(analysisText) {
     resumenRaw: resumenSplit[1].trim(),
     isFactura
   };
-}
-
-function isNaNLikeValue(value) {
-  if (value === null || value === undefined) return true;
-  const text = String(value).trim().toLowerCase();
-  return !text || text === 'nan' || text === 'null' || text === 'undefined' || text === '-';
-}
-
-function toComparableNumberSafe(value) {
-  if (value === null || value === undefined) return null;
-  const text = String(value).trim().replace(',', '.');
-  if (!text) return null;
-  const n = Number(text);
-  return Number.isFinite(n) ? n : null;
-}
-
-function detectUnreadableAnalysisReason(analysisText = '') {
-  const sections = extractAnalysisSections(analysisText);
-  if (!sections) {
-    return 'No se pudo interpretar el formato del análisis generado.';
-  }
-
-  const resumenLine = (sections.resumenRaw || '')
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .find(Boolean);
-
-  if (!resumenLine) {
-    return 'El análisis no devolvió resumen (resultado vacío).';
-  }
-
-  let resumenObj = null;
-  try {
-    resumenObj = JSON.parse(resumenLine);
-  } catch {
-    return 'El análisis devolvió un resumen inválido.';
-  }
-
-  const total = toComparableNumberSafe(resumenObj?.total);
-  const totalSinIva = toComparableNumberSafe(resumenObj?.total_sin_iva);
-
-  const allMainTotalsMissing = (
-    isNaNLikeValue(resumenObj?.total)
-    && isNaNLikeValue(resumenObj?.total_sin_iva)
-    && isNaNLikeValue(resumenObj?.iva)
-  );
-
-  const allMainTotalsZero = (
-    total !== null
-    && totalSinIva !== null
-    && Math.abs(total) < 1e-9
-    && Math.abs(totalSinIva) < 1e-9
-  );
-
-  if (allMainTotalsMissing) {
-    return 'No se pudieron extraer importes/totales (todo NaN o vacío).';
-  }
-
-  if (allMainTotalsZero) {
-    return 'Los totales detectados son 0, posible lectura ilegible del documento.';
-  }
-
-  const articuloLines = (sections.articulosRaw || '')
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean);
-
-  if (!articuloLines.length) {
-    return 'No se detectaron líneas de artículos en el documento.';
-  }
-
-  let parsedArticles = 0;
-  let allArticlesEmpty = true;
-  for (const line of articuloLines) {
-    try {
-      const row = JSON.parse(line);
-      parsedArticles += 1;
-      const candidateFields = [
-        row?.articulo,
-        row?.kg,
-        row?.importe,
-        row?.precio,
-        row?.unidades,
-        row?.num_albaran,
-        row?.num_factura
-      ];
-      const hasSomeData = candidateFields.some(v => !isNaNLikeValue(v));
-      if (hasSomeData) {
-        allArticlesEmpty = false;
-        break;
-      }
-    } catch {
-      // ignorar línea no JSON
-    }
-  }
-
-  if (!parsedArticles) {
-    return 'No se pudo parsear ninguna línea de artículos del análisis.';
-  }
-
-  if (allArticlesEmpty) {
-    return 'Las líneas detectadas no contienen datos útiles (todo NaN/vacío).';
-  }
-
-  return null;
 }
 
 function appendSourceToJsonLines(text, sourceFileName) {
@@ -2089,7 +1883,6 @@ async function uploadFilesToFolder(parentFolderName, selectedFilePaths = null) {
               try {
                 if (currentUploadOrder === 'facturas-first') {
                   pendingFacturaComparisons.set(item.queueId, {
-                    createdAt: Date.now(),
                     item: {
                       queueId: item.queueId,
                       fileName: item.fileName,
@@ -3365,13 +3158,9 @@ function markQueueError(id, message) {
   const item = uploadQueue.get(id);
   if (!item) return;
   item.status = 'Error';
-  const baseMessage = message || 'Error';
-  item.error = item?.fileName
-    ? `${item.fileName}: ${baseMessage}`
-    : baseMessage;
+  item.error = message || 'Error';
   uploadQueue.set(id, item);
   selectedQueueIds.delete(id);
-  showBackendAlert(item.error, 'queue-error');
   renderQueue();
 }
 
