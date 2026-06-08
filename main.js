@@ -655,6 +655,65 @@ function buildIANotesEmailLines(analysisText) {
   ];
 }
 
+function isTotalFallbackFlagEnabled(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'sí'
+    || normalized === 'si'
+    || normalized === 'true'
+    || normalized === '1'
+    || normalized === 'yes';
+}
+
+function buildTotalFallbackWarningLabel(docType = 'documento') {
+  const normalized = String(docType || '').toLowerCase().includes('factura') ? 'factura' : 'albarán';
+  return `El total de ${normalized} ha sido hecho sumando todos los importes, se recomienda comprobación manual.`;
+}
+
+function getTotalFallbackInfoFromResumen(resumen = {}, docType = 'documento') {
+  const used = isTotalFallbackFlagEnabled(resumen?.total_calculado_por_suma);
+  if (!used) {
+    return { used: false, warning: null, totalSumado: null };
+  }
+
+  const fallbackWarning = String(resumen?.total_fallback_warning || '').trim();
+  return {
+    used: true,
+    warning: fallbackWarning && fallbackWarning !== 'No'
+      ? fallbackWarning
+      : buildTotalFallbackWarningLabel(docType),
+    totalSumado: parseComparableNumber(resumen?.total_sumado)
+  };
+}
+
+function buildTotalFallbackEmailLines(compareResult = {}) {
+  const warnings = Array.isArray(compareResult?.totalFallbackWarnings)
+    ? compareResult.totalFallbackWarnings
+    : [];
+  const uniqueWarnings = [...new Set(
+    warnings
+      .map((line) => String(line || '').trim())
+      .filter(Boolean)
+  )];
+
+  if (!uniqueWarnings.length) return [];
+  return [
+    '⚠️ AVISO DE TOTAL CALCULADO POR SUMA:',
+    ...uniqueWarnings.map((warning) => `- ${warning}`)
+  ];
+}
+
+function buildTotalFallbackEmailHtml(compareResult = {}) {
+  const lines = buildTotalFallbackEmailLines(compareResult).slice(1);
+  if (!lines.length) return '';
+
+  return `
+    <div style="background:#fff7e6; border:1px solid #ffd591; border-radius:8px; padding:12px; margin:12px 0; color:#5f3b00;">
+      <p style="margin:0 0 6px;"><strong>⚠️ Aviso de total calculado por suma</strong></p>
+      <ul style="margin:0; padding-left:18px;">${lines.map((line) => `<li>${escapeHtml(String(line).replace(/^\-\s*/, ''))}</li>`).join('')}</ul>
+    </div>
+  `;
+}
+
 function buildAlbaranTotalsComparisonLines(compareResult = {}, facturaFileName = '') {
   const rows = Array.isArray(compareResult?.albaranTotalsComparison)
     ? compareResult.albaranTotalsComparison
@@ -837,6 +896,8 @@ function buildComparisonEmailPayload({
     formatAlbaranTotalComparisonLineHtml,
     'No disponible'
   );
+  const totalFallbackEmailLines = buildTotalFallbackEmailLines(compareResult);
+  const totalFallbackEmailHtml = buildTotalFallbackEmailHtml(compareResult);
   const normalizedIaNotes = Array.isArray(iaNotesLines) ? iaNotesLines.filter(Boolean) : [];
   const htmlIaNotes = normalizedIaNotes.length
     ? `<h3 style="margin:14px 0 8px; font-size:15px;">🧠 Notas IA</h3><ul style="margin-top:0;">${normalizedIaNotes.map((line) => `<li>${escapeHtml(String(line).replace(/^\-\s*/, ''))}</li>`).join('')}</ul>`
@@ -853,6 +914,7 @@ function buildComparisonEmailPayload({
         `Albaranes comparados: ${albaranesLabel}`,
         `Total factura: ${facturaTotalLabel}`,
         `Total albaranes: ${albaranesTotalLabel}`,
+        ...(totalFallbackEmailLines.length ? ['', ...totalFallbackEmailLines] : []),
         '',
         '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
         ...totalsByAlbaranLines,
@@ -883,6 +945,8 @@ function buildComparisonEmailPayload({
             <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
             <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
           </div>
+
+          ${totalFallbackEmailHtml}
 
           <div style="margin: 14px 0;">
             <h3 style="margin:0 0 8px; font-size:15px;">📄 Factura original</h3>
@@ -920,6 +984,7 @@ function buildComparisonEmailPayload({
       `Albaranes comparados: ${albaranesLabel}`,
       `Total factura: ${facturaTotalLabel}`,
       `Total albaranes: ${albaranesTotalLabel}`,
+      ...(totalFallbackEmailLines.length ? ['', ...totalFallbackEmailLines] : []),
       '',
       '=== TOTALES POR ALBARÁN (CON ARCHIVOS ORIGEN) ===',
       ...totalsByAlbaranLines,
@@ -941,6 +1006,8 @@ function buildComparisonEmailPayload({
           <p style="margin:0 0 6px;"><strong>Total factura:</strong> <strong>${escapeHtml(facturaTotalLabel)}</strong></p>
           <p style="margin:0;"><strong>Total albaranes:</strong> <strong>${escapeHtml(albaranesTotalLabel)}</strong></p>
         </div>
+
+        ${totalFallbackEmailHtml}
 
         <h3 style="margin:14px 0 8px; font-size:15px;">✅ Albaranes correctos</h3>
         <ul style="margin-top:0;">${htmlCongruentSummary}</ul>
@@ -1068,7 +1135,7 @@ function extractTotalDetectedFromTotalTxtText(totalText = '') {
 function extractTotalsDetectedFromTotalTxtText(totalText = '') {
   const text = String(totalText || '').trim();
   if (!text) {
-    return { total: null, totalSinIva: null };
+    return { total: null, totalSinIva: null, totalFallbackUsed: false, totalFallbackWarning: null, totalSumado: null };
   }
 
   let parsed = null;
@@ -1086,15 +1153,22 @@ function extractTotalsDetectedFromTotalTxtText(totalText = '') {
   }
 
   if (parsed && typeof parsed === 'object') {
+    const fallbackInfo = getTotalFallbackInfoFromResumen(parsed, 'albarán');
     return {
       total: parseComparableNumber(parsed?.total),
-      totalSinIva: parseComparableNumber(parsed?.total_sin_iva)
+      totalSinIva: parseComparableNumber(parsed?.total_sin_iva),
+      totalFallbackUsed: fallbackInfo.used,
+      totalFallbackWarning: fallbackInfo.warning,
+      totalSumado: fallbackInfo.totalSumado
     };
   }
 
   return {
     total: extractTotalDetectedFromTotalTxtText(totalText),
-    totalSinIva: null
+    totalSinIva: null,
+    totalFallbackUsed: false,
+    totalFallbackWarning: null,
+    totalSumado: null
   };
 }
 
@@ -3486,6 +3560,11 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
   const parsed = parseFacturaAnalysis(facturaAnalysisText);
   const facturaTotalsByAlbaran = buildFacturaTotalsByAlbaran(parsed);
   const parsedFacturaTotal = parseComparableNumber(parsed?.resumen?.total);
+  const facturaTotalFallbackInfo = getTotalFallbackInfoFromResumen(parsed?.resumen || {}, 'factura');
+  const totalFallbackWarnings = [];
+  if (facturaTotalFallbackInfo.used) {
+    totalFallbackWarnings.push(facturaTotalFallbackInfo.warning);
+  }
   if (!parsed || !parsed.albaranNumbers.length) {
     return {
       ok: true,
@@ -3497,8 +3576,10 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       incongruentAlbaranDocs: [],
       congruentAlbaranDocs: [],
       facturaTotal: parsedFacturaTotal,
+      facturaTotalCalculadoPorSuma: facturaTotalFallbackInfo.used,
       sumatoriaTotalesAlbaranes: null,
-      albaranTotalsComparison: []
+      albaranTotalsComparison: [],
+      totalFallbackWarnings
     };
   }
 
@@ -3585,12 +3666,19 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     const totalTxt = resolveTotalAlbaranTxtFile(albaranNum, informesNoComparadoFiles);
     let totalDetected = null;
     let totalDetectedSinIva = null;
+    let totalDetectedFallbackUsed = false;
+    let totalDetectedFallbackWarning = null;
     const facturaTotalForAlbaran = facturaTotalsByAlbaran.get(normalizeAlbaranNumberForMatch(albaranNum)) ?? null;
     if (totalTxt) {
       const totalText = await downloadDriveFileToString(totalTxt);
       const extractedTotals = extractTotalsDetectedFromTotalTxtText(totalText);
       totalDetected = extractedTotals.total;
       totalDetectedSinIva = extractedTotals.totalSinIva;
+      totalDetectedFallbackUsed = Boolean(extractedTotals.totalFallbackUsed);
+      totalDetectedFallbackWarning = extractedTotals.totalFallbackWarning || null;
+      if (extractedTotals.totalFallbackUsed) {
+        totalFallbackWarnings.push(`${extractedTotals.totalFallbackWarning || buildTotalFallbackWarningLabel('albarán')} Albarán: ${albaranNum}.`);
+      }
     }
 
     albaranTotalsComparison.push({
@@ -3601,6 +3689,8 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       totalAlbaranDetectado: totalDetected,
       totalAlbaranDetectadoSinIva: totalDetectedSinIva,
       totalAlbaranDetectadoConIva: totalDetected,
+      totalAlbaranCalculadoPorSuma: totalDetectedFallbackUsed,
+      totalAlbaranFallbackWarning: totalDetectedFallbackWarning,
       albaranSourceFileName: sourceFile?.name || sourceFileName || null
     });
 
@@ -3746,8 +3836,10 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
       incongruentAlbaranDocs: [],
       congruentAlbaranDocs,
       facturaTotal,
+      facturaTotalCalculadoPorSuma: facturaTotalFallbackInfo.used,
       sumatoriaTotalesAlbaranes: mode === 'totales' ? sumatoriaTotalesAlbaranes : null,
-      albaranTotalsComparison
+      albaranTotalsComparison,
+      totalFallbackWarnings: [...new Set(totalFallbackWarnings)]
     };
   }
 
@@ -3761,8 +3853,10 @@ async function compareFacturaWithAlbaranes({ facturaAnalysisText, rootFolderName
     incongruentAlbaranDocs,
     congruentAlbaranDocs,
     facturaTotal,
+    facturaTotalCalculadoPorSuma: facturaTotalFallbackInfo.used,
     sumatoriaTotalesAlbaranes: mode === 'totales' ? sumatoriaTotalesAlbaranes : null,
-    albaranTotalsComparison
+    albaranTotalsComparison,
+    totalFallbackWarnings: [...new Set(totalFallbackWarnings)]
   };
 }
 
