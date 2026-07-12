@@ -2937,6 +2937,7 @@ function openUploadDropModal(parentFolderName) {
     uploadDropTitle.textContent = `Subir ${parentFolderName === 'Facturas' ? 'Factura' : 'Albarán'}`;
   }
   uploadDropZone.classList.remove('drag-over');
+  uploadDropZoneFiles?.classList.remove('drag-over');
   uploadDropModal.classList.add('active');
 }
 
@@ -2986,6 +2987,13 @@ if (uploadDropZoneFiles) {
     if (!target) return;
     closeUploadDropModal();
     await scheduleUploadFlow(target, null, 'file');
+  });
+
+  bindDropHandlers(uploadDropZoneFiles, async (droppedFilePaths) => {
+    const target = currentUploadTargetFolder;
+    if (!target) return;
+    closeUploadDropModal();
+    await scheduleUploadFlow(target, droppedFilePaths);
   });
 }
 
