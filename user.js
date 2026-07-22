@@ -283,15 +283,24 @@ function areAllExpectedAlbaranesReady(compareResult = {}) {
   const matched = Array.isArray(compareResult?.matchedAlbaranes) ? compareResult.matchedAlbaranes : [];
   if (!expected.length) return true;
 
-  const matchedSet = new Set(matched.map(num => String(num || '').trim()).filter(Boolean));
+  const matchedSet = new Set(matched.map(normalizeAlbaranId).filter(Boolean));
   return expected
-    .map(num => String(num || '').trim())
+    .map(normalizeAlbaranId)
     .filter(Boolean)
     .every(num => matchedSet.has(num));
 }
 
+function cleanAlbaranDisplayId(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  // Alantr puede anteponer la etiqueta separada "AL" al número real.
+  // No se elimina si forma parte del código, como en ALANTR123.
+  return raw.replace(/^AL(?:[\s._\-/:#]+|(?=AB\d))/i, '').trim();
+}
+
 function normalizeAlbaranId(value = '') {
-  return String(value || '')
+  return cleanAlbaranDisplayId(value)
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -314,7 +323,7 @@ function extractExpectedAlbaranesFromFactura(analysisText = '') {
       const parsed = JSON.parse(resumenLine);
       const nums = Array.isArray(parsed?.num_albaran) ? parsed.num_albaran : [];
       nums.forEach((num) => {
-        const clean = String(num || '').trim();
+        const clean = cleanAlbaranDisplayId(num);
         if (clean) expected.add(clean);
       });
     } catch (e) {
@@ -330,7 +339,7 @@ function extractExpectedAlbaranesFromFactura(analysisText = '') {
       .forEach((line) => {
         try {
           const parsed = JSON.parse(line);
-          const clean = String(parsed?.num_albaran || '').trim();
+          const clean = cleanAlbaranDisplayId(parsed?.num_albaran);
           if (clean) expected.add(clean);
         } catch (e) {
           // ignore
