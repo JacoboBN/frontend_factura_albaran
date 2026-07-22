@@ -70,7 +70,9 @@ const DEFAULT_RETRY_MAX_DELAY_MS = 15000;
 
 // Polling de jobs asíncronos
 const JOB_POLL_INTERVAL_MS = 2000;   // cada 2 s
-const JOB_POLL_MAX_ATTEMPTS = 150;   // máx ~5 minutos
+// El backend limita globalmente los análisis pesados, por lo que un job puede esperar en cola.
+// Ampliar el polling no retiene otra copia del PDF: aquí solo se conserva el identificador del job.
+const JOB_POLL_MAX_ATTEMPTS = 900;   // máx ~30 minutos
 
 // Cancelación de items de cola desde el renderer
 const pendingCancellations = new Set(); // queueId → pendiente de cancelar
